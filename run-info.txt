@@ -7,10 +7,8 @@ $p = Join-Path $env:TEMP "run-zta.ps1"
 Invoke-WebRequest -Uri $u -OutFile $p
 
 if (Get-Command pwsh -ErrorAction SilentlyContinue) {
-    pwsh -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId
+    pwsh -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId; exit
 }
 else {
-    powershell -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId
+    powershell -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId; exit
 }
-
-exit
