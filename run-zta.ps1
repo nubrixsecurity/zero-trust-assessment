@@ -321,6 +321,19 @@ catch {
 finally {
     Write-Host "[INFO] Disconnecting sessions..."
 
+    Write-Host "[INFO] Disconnecting AzAccount..."
+    Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
+    
+    Write-Host "[INFO] Clearing Az context..."
+    Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
+    
+    Write-Host "[INFO] Disconnecting Microsoft Graph..."
+    Disconnect-MgGraph -ErrorAction SilentlyContinue
+    
+    Write-Host "[INFO] Cleanup complete."
+    <#
+    Write-Host "[INFO] Disconnecting sessions..."
+
     # Simple disconnects (no -Force). Exchange needs -Confirm:$false.
     if (Get-Module -Name Az.Accounts -ErrorAction SilentlyContinue) {
         Write-Host "[INFO] Disconnecting AzAccount and clearing context..."
@@ -339,7 +352,7 @@ finally {
     }
 
     Write-Host "[INFO] Cleanup complete."
-
+#>
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
     }
