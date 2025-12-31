@@ -303,7 +303,7 @@ try {
     Connect-ZtAssessment -TenantId $TenantId
 
     Write-Host "[INFO] Running Zero Trust Assessment..."
-    Invoke-ZtAssessment -Path $OutputPath
+    Invoke-ZtAssessment -Path $OutputPath -Tests
 
     if ($Partner) {
         Set-ManagementPartnerAssociationSilent -TenantId $TenantId -PartnerIdDesired $PartnerIdDesired
