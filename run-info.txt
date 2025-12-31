@@ -1,5 +1,5 @@
 $tenantId = "your-tenant-id"
-$subId = "your-subscription-id"
+$subId    = "your-subscription-id"
 
 $u = "https://raw.githubusercontent.com/nubrixsecurity/zero-trust-assessment/main/run-zta.ps1"
 $p = Join-Path $env:TEMP "run-zta.ps1"
@@ -12,3 +12,5 @@ if (Get-Command pwsh -ErrorAction SilentlyContinue) {
 else {
     powershell -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId
 }
+
+exit
