@@ -1,3 +1,15 @@
+<#
+NOTES
+
+Example — Run with Partner association (custom PartnerId)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File $p `
+    -TenantId $tenantId `
+    -SubscriptionId $subId `
+    -Partner `
+    -PartnerIdDesired 7023112
+#>
+
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
@@ -96,7 +108,6 @@ function Set-ManagementPartnerAssociationSilent {
         [int]$PartnerIdDesired
     )
 
-    # Save current preferences
     $oldEap = $ErrorActionPreference
     $oldWp  = $WarningPreference
     $oldVp  = $VerbosePreference
@@ -104,14 +115,12 @@ function Set-ManagementPartnerAssociationSilent {
     $oldPp  = $ProgressPreference
 
     try {
-        # Force silent preferences (no warnings, no progress, no verbose/info)
         $ErrorActionPreference = 'SilentlyContinue'
         $WarningPreference     = 'SilentlyContinue'
         $VerbosePreference     = 'SilentlyContinue'
         $InformationPreference = 'SilentlyContinue'
         $ProgressPreference    = 'SilentlyContinue'
 
-        # Install only if missing (quiet)
         if (-not (Get-Module -ListAvailable -Name Az.Accounts)) {
             Install-Module Az.Accounts -Scope CurrentUser -Force -AllowClobber -WarningAction SilentlyContinue | Out-Null
         }
@@ -119,15 +128,12 @@ function Set-ManagementPartnerAssociationSilent {
             Install-Module Az.ManagementPartner -Scope CurrentUser -Force -AllowClobber -WarningAction SilentlyContinue | Out-Null
         }
 
-        # Import (quiet)
         Import-Module Az.Accounts -Force -WarningAction SilentlyContinue | Out-Null
         Import-Module Az.ManagementPartner -Force -WarningAction SilentlyContinue | Out-Null
 
-        # Assume already authenticated; if not, try tenant-scoped login (still quiet)
         $ctx = Get-AzContext -ErrorAction SilentlyContinue
         $ctxTenant = $null
         if ($ctx -and $ctx.Tenant) {
-            # Tenant may be string or object with Id
             if ($ctx.Tenant.Id) { $ctxTenant = $ctx.Tenant.Id }
             else { $ctxTenant = [string]$ctx.Tenant }
         }
@@ -136,7 +142,6 @@ function Set-ManagementPartnerAssociationSilent {
             Connect-AzAccount -Tenant $TenantId -ErrorAction SilentlyContinue | Out-Null
         }
 
-        # Get current partner association and set desired
         $mp = Get-AzManagementPartner -ErrorAction SilentlyContinue
         $currentPid = $null
         if ($mp -and $mp.PartnerId) { $currentPid = [int]$mp.PartnerId }
@@ -148,10 +153,8 @@ function Set-ManagementPartnerAssociationSilent {
             Remove-AzManagementPartner -PartnerId $currentPid -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
             New-AzManagementPartner -PartnerId $PartnerIdDesired -ErrorAction SilentlyContinue | Out-Null
         }
-        # else: already set correctly, do nothing (silent)
     }
     finally {
-        # Restore preferences
         $ErrorActionPreference = $oldEap
         $WarningPreference     = $oldWp
         $VerbosePreference     = $oldVp
@@ -183,7 +186,6 @@ function Invoke-SelfDelete {
         Write-Host "[INFO] Scheduled self-delete for: $ScriptPath"
     }
     catch {
-        # Best-effort cleanup only; don't fail the run if cleanup fails.
         Write-Warning "Unable to schedule self-delete for $ScriptPath. Error: $($_.Exception.Message)"
     }
 }
@@ -216,5 +218,26 @@ catch {
     throw
 }
 finally {
+    # Visible cleanup (no confirmation prompts, best-effort)
+    Write-Host "[INFO] Disconnecting sessions..."
+
+    if (Get-Module -Name Az.Accounts -ErrorAction SilentlyContinue) {
+        Write-Host "[INFO] Disconnecting AzAccount (Process scope) and clearing context..."
+        Disconnect-AzAccount -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
+        Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    if (Get-Command Disconnect-MgGraph -ErrorAction SilentlyContinue) {
+        Write-Host "[INFO] Disconnecting Microsoft Graph..."
+        Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    if (Get-Command Disconnect-ExchangeOnline -ErrorAction SilentlyContinue) {
+        Write-Host "[INFO] Disconnecting Exchange Online..."
+        Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    Write-Host "[INFO] Cleanup complete."
+
     Invoke-SelfDelete -ScriptPath $scriptPath
 }
