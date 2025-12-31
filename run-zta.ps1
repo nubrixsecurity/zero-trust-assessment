@@ -12,7 +12,10 @@ param(
     [string]$OutputPath,
 
     [Parameter(Mandatory = $false)]
-    [switch]$NoSelfDelete
+    [switch]$NoSelfDelete,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$UpdateModules
 )
 
 #region Output path (Documents + date + timestamp)
@@ -27,6 +30,53 @@ New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
 Write-Host "[INFO] PowerShell version: $($PSVersionTable.PSVersion)"
 Write-Host "[INFO] OutputPath: $OutputPath"
 #endregion Output path
+
+#region Ensure module installed (install only if missing)
+function Ensure-ModuleInstalled {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$Update
+    )
+
+    $installed = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
+
+    if (-not $installed) {
+        Write-Host "[INFO] Installing $Name (CurrentUser)..."
+        $oldWP = $WarningPreference
+        $oldPP = $ProgressPreference
+        $WarningPreference = 'SilentlyContinue'
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Install-Module $Name -Scope CurrentUser -AllowClobber -Force
+        }
+        finally {
+            $WarningPreference = $oldWP
+            $ProgressPreference = $oldPP
+        }
+        return
+    }
+
+    Write-Host "[INFO] $Name already installed (v$($installed.Version))."
+
+    if ($Update) {
+        Write-Host "[INFO] Updating $Name (CurrentUser)..."
+        $oldWP = $WarningPreference
+        $oldPP = $ProgressPreference
+        $WarningPreference = 'SilentlyContinue'
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Update-Module $Name -Scope CurrentUser -Force -ErrorAction SilentlyContinue
+        }
+        finally {
+            $WarningPreference = $oldWP
+            $ProgressPreference = $oldPP
+        }
+    }
+}
+#endregion Ensure module installed
 
 #region Self-delete (best-effort)
 function Invoke-SelfDelete {
@@ -45,7 +95,6 @@ function Invoke-SelfDelete {
     }
 
     try {
-        # Delay ~2 seconds then delete the script file.
         $cmd = "/c ping 127.0.0.1 -n 3 > nul & del /f /q `"$ScriptPath`""
         Start-Process -FilePath "cmd.exe" -ArgumentList $cmd -WindowStyle Hidden | Out-Null
         Write-Host "[INFO] Scheduled self-delete for: $ScriptPath"
@@ -59,8 +108,7 @@ function Invoke-SelfDelete {
 $scriptPath = $MyInvocation.MyCommand.Path
 
 try {
-    Write-Host "[INFO] Installing ZeroTrustAssessment module (CurrentUser)..."
-    Install-Module ZeroTrustAssessment -Scope CurrentUser -AllowClobber -Force
+    Ensure-ModuleInstalled -Name "ZeroTrustAssessment" -Update:$UpdateModules
 
     Write-Host "[INFO] Clearing Az config and setting default subscription for login..."
     Clear-AzConfig -Scope CurrentUser -Force -ErrorAction Ignore | Out-Null
