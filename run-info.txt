@@ -1,3 +1,16 @@
+<#
+NOTES
+
+Example — Run with Partner association (custom PartnerId)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File $p `
+    -TenantId $tenantId `
+    -SubscriptionId $subId `
+    -Partner `
+    -PartnerIdDesired 7023112
+
+#>
+
 $tenantId = "your-tenant-id"
 $subId    = "your-subscription-id"
 
