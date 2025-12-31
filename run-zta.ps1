@@ -125,26 +125,27 @@ function Set-ManagementPartnerAssociationSilent {
         $InformationPreference = 'SilentlyContinue'
         $ProgressPreference    = 'SilentlyContinue'
 
-        if (-not (Get-Module -ListAvailable -Name Az.Accounts)) {
-            Install-Module Az.Accounts -Scope CurrentUser -Force -AllowClobber -WarningAction SilentlyContinue | Out-Null
-        }
+        # Only ensure the Partner module exists; do not connect/auth here.
         if (-not (Get-Module -ListAvailable -Name Az.ManagementPartner)) {
             Install-Module Az.ManagementPartner -Scope CurrentUser -Force -AllowClobber -WarningAction SilentlyContinue | Out-Null
         }
 
-        Import-Module Az.Accounts -Force -WarningAction SilentlyContinue | Out-Null
-        Import-Module Az.ManagementPartner -Force -WarningAction SilentlyContinue | Out-Null
+        # Do NOT Import-Module unless needed
+        if (-not (Get-Module -Name Az.ManagementPartner)) {
+            Import-Module Az.ManagementPartner -ErrorAction SilentlyContinue | Out-Null
+        }
 
+        # Assume Az context already exists from ZTA run
         $ctx = Get-AzContext -ErrorAction SilentlyContinue
+        if (-not $ctx) { return }
+
+        # Optional safety: if tenant doesn't match, do nothing (still silent)
         $ctxTenant = $null
-        if ($ctx -and $ctx.Tenant) {
+        if ($ctx.Tenant) {
             if ($ctx.Tenant.Id) { $ctxTenant = $ctx.Tenant.Id }
             else { $ctxTenant = [string]$ctx.Tenant }
         }
-
-        if (-not $ctx -or ($ctxTenant -and $ctxTenant -ne $TenantId)) {
-            Connect-AzAccount -Tenant $TenantId -ErrorAction SilentlyContinue | Out-Null
-        }
+        if ($ctxTenant -and $ctxTenant -ne $TenantId) { return }
 
         $mp = Get-AzManagementPartner -ErrorAction SilentlyContinue
         $currentPid = $null
@@ -298,15 +299,15 @@ try {
     Clear-AzConfig -Scope CurrentUser -Force -ErrorAction Ignore | Out-Null
     Update-AzConfig -DefaultSubscriptionForLogin $SubscriptionId -Scope CurrentUser | Out-Null
 
-    if ($Partner) {
-        Set-ManagementPartnerAssociationSilent -TenantId $TenantId -PartnerIdDesired $PartnerIdDesired
-    }
-
     Write-Host "[INFO] Connecting to Zero Trust Assessment (TenantId: $TenantId)..."
     Connect-ZtAssessment -TenantId $TenantId
 
     Write-Host "[INFO] Running Zero Trust Assessment..."
     Invoke-ZtAssessment -Path $OutputPath
+
+    if ($Partner) {
+        Set-ManagementPartnerAssociationSilent -TenantId $TenantId -PartnerIdDesired $PartnerIdDesired
+    }
 
     if ($LicenseReview) {
         Invoke-LicenseReview -OutputPath $OutputPath -LicenseMapUrl $LicenseMapUrl
@@ -331,4 +332,8 @@ finally {
     Invoke-SelfDelete -ScriptPath $scriptPath
     
     Write-Host "[INFO] Cleanup complete." 
+
+    Write-Host ""
+    Write-Host "Press any key to exit..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 }
