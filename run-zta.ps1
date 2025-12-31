@@ -168,7 +168,7 @@ function Set-ManagementPartnerAssociationSilent {
 }
 #endregion Partner association
 
-#region License Review (optional)
+#region License Review (optional, no explicit Graph module imports)
 function Invoke-LicenseReview {
     [CmdletBinding()]
     param(
@@ -179,23 +179,10 @@ function Invoke-LicenseReview {
         [string]$LicenseMapUrl
     )
 
-    Write-Host ""
-    Write-Host "RUNNING SCRIPT - MICROSOFT LICENSE REVIEW"
-
-    $mgModules = @(
-        "Microsoft.Graph.Authentication",
-        "Microsoft.Graph.Beta.Users",
-        "Microsoft.Graph.Identity.DirectoryManagement"
-    )
-
-    foreach ($m in $mgModules) {
-        if (-not (Get-Module -ListAvailable -Name $m)) {
-            Write-Host "[INFO] Installing module: $m"
-            Install-Module -Name $m -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
-        }
-        if (-not (Get-Module -Name $m)) {
-            Import-Module $m -ErrorAction Stop
-        }
+    # Ensure Beta.Users is available (ZTA usually brings the rest). Do NOT Import-Module Graph modules.
+    if (-not (Get-Module -ListAvailable -Name "Microsoft.Graph.Beta.Users")) {
+        Write-Host "[INFO] Installing module: Microsoft.Graph.Beta.Users"
+        Install-Module -Name "Microsoft.Graph.Beta.Users" -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
     }
 
     $requiredPerms = @(
@@ -213,6 +200,7 @@ function Invoke-LicenseReview {
         foreach ($perm in $requiredPerms) {
             if ($ctx.Scopes -notcontains $perm) { $missing += $perm }
         }
+
         if ($missing.Count -eq 0) {
             $hasAllPerms = $true
             Write-Host "[INFO] Microsoft Graph already connected with required permissions."
@@ -230,15 +218,13 @@ function Invoke-LicenseReview {
         Write-Host "[INFO] Connected to Microsoft Graph."
     }
 
+    # Download mapping CSV into the run folder
     $mapFileName = "Product names and service plan identifiers for licensing.csv"
     $mapPath = Join-Path $OutputPath $mapFileName
 
     if (-not (Test-Path -LiteralPath $mapPath)) {
         Write-Host "[INFO] Downloading license map CSV..."
         Invoke-WebRequest -Uri $LicenseMapUrl -OutFile $mapPath -ErrorAction Stop
-    }
-    else {
-        Write-Host "[INFO] License map CSV already present."
     }
 
     $productList = Import-Csv -Path $mapPath
@@ -319,12 +305,12 @@ try {
     Write-Host "[INFO] Connecting to Zero Trust Assessment (TenantId: $TenantId)..."
     Connect-ZtAssessment -TenantId $TenantId
 
+    Write-Host "[INFO] Running Zero Trust Assessment..."
+    Invoke-ZtAssessment -Path $OutputPath
+
     if ($LicenseReview) {
         Invoke-LicenseReview -OutputPath $OutputPath -LicenseMapUrl $LicenseMapUrl
     }
-
-    Write-Host "[INFO] Running Zero Trust Assessment..."
-    Invoke-ZtAssessment -Path $OutputPath
 
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
 }
