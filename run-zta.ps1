@@ -1,13 +1,8 @@
 <#
-NOTES
-
-Example — Run with Partner association (custom PartnerId)
-
-powershell -NoProfile -ExecutionPolicy Bypass -File $p `
-    -TenantId $tenantId `
-    -SubscriptionId $subId `
-    -Partner `
+    FLAGS:
+    -Partner
     -PartnerIdDesired 7023112
+    -LicenseReview
 #>
 
 [CmdletBinding()]
@@ -33,7 +28,16 @@ param(
     [switch]$Partner,
 
     [Parameter(Mandatory = $false)]
-    [int]$PartnerIdDesired = 7023112
+    [int]$PartnerIdDesired = 7023112,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$LicenseReview,
+
+    [Parameter(Mandatory = $false)]
+    [string]$LicenseMapUrl = "https://raw.githubusercontent.com/nubrixsecurity/zero-trust-assessment/main/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$OpenOutput
 )
 
 #region Output path (Documents + date + timestamp)
@@ -164,6 +168,114 @@ function Set-ManagementPartnerAssociationSilent {
 }
 #endregion Partner association
 
+#region License Review (optional)
+function Invoke-LicenseReview {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OutputPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LicenseMapUrl
+    )
+
+    Write-Host ""
+    Write-Host "RUNNING SCRIPT - MICROSOFT LICENSE REVIEW"
+
+    $mgModules = @(
+        "Microsoft.Graph.Authentication",
+        "Microsoft.Graph.Beta.Users",
+        "Microsoft.Graph.Identity.DirectoryManagement"
+    )
+
+    foreach ($m in $mgModules) {
+        if (-not (Get-Module -ListAvailable -Name $m)) {
+            Write-Host "[INFO] Installing module: $m"
+            Install-Module -Name $m -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
+        }
+        if (-not (Get-Module -Name $m)) {
+            Import-Module $m -ErrorAction Stop
+        }
+    }
+
+    $requiredPerms = @(
+        "User.Read.All",
+        "AuditLog.Read.All",
+        "Organization.Read.All",
+        "Directory.Read.All"
+    )
+
+    $ctx = Get-MgContext
+    $hasAllPerms = $false
+
+    if ($ctx -and $ctx.Scopes) {
+        $missing = @()
+        foreach ($perm in $requiredPerms) {
+            if ($ctx.Scopes -notcontains $perm) { $missing += $perm }
+        }
+        if ($missing.Count -eq 0) {
+            $hasAllPerms = $true
+            Write-Host "[INFO] Microsoft Graph already connected with required permissions."
+        }
+        else {
+            Write-Host "[INFO] Reconnecting to Microsoft Graph to include required permissions..."
+        }
+    }
+    else {
+        Write-Host "[INFO] Connecting to Microsoft Graph..."
+    }
+
+    if (-not $hasAllPerms) {
+        Connect-MgGraph -Scopes $requiredPerms -NoWelcome -ErrorAction Stop | Out-Null
+        Write-Host "[INFO] Connected to Microsoft Graph."
+    }
+
+    $mapFileName = "Product names and service plan identifiers for licensing.csv"
+    $mapPath = Join-Path $OutputPath $mapFileName
+
+    if (-not (Test-Path -LiteralPath $mapPath)) {
+        Write-Host "[INFO] Downloading license map CSV..."
+        Invoke-WebRequest -Uri $LicenseMapUrl -OutFile $mapPath -ErrorAction Stop
+    }
+    else {
+        Write-Host "[INFO] License map CSV already present."
+    }
+
+    $productList = Import-Csv -Path $mapPath
+
+    $guidMap = @{}
+    foreach ($item in $productList) {
+        if ($item.GUID) { $guidMap[$item.GUID] = $item.Product_Display_Name }
+    }
+
+    $licenses = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/beta/subscribedSkus" -OutputType PSObject -ErrorAction Stop |
+        Select-Object -ExpandProperty value |
+        Where-Object { $_.CapabilityStatus -eq 'Enabled' }
+
+    $licenseOverview = foreach ($license in $licenses) {
+        $skuId = [string]$license.skuId
+        $skuName = [string]$license.skuPartNumber
+        $productName = if ($guidMap.ContainsKey($skuId)) { $guidMap[$skuId] } else { $skuName }
+
+        $total  = [int]$license.PrepaidUnits.Enabled
+        $used   = [int]$license.ConsumedUnits
+        $unused = $total - $used
+
+        [PSCustomObject]@{
+            "Product Name" = $productName
+            "Total"        = $total
+            "Assigned"     = $used
+            "Unused"       = $unused
+        }
+    }
+
+    $csvOut = Join-Path $OutputPath "License_Review.csv"
+    $licenseOverview | Export-Csv -Path $csvOut -NoTypeInformation -Encoding UTF8
+
+    Write-Host "[INFO] License review exported: $csvOut"
+}
+#endregion License Review
+
 #region Self-delete (best-effort)
 function Invoke-SelfDelete {
     param(
@@ -201,14 +313,17 @@ try {
     Update-AzConfig -DefaultSubscriptionForLogin $SubscriptionId -Scope CurrentUser | Out-Null
 
     if ($Partner) {
-        # Completely silent by design
         Set-ManagementPartnerAssociationSilent -TenantId $TenantId -PartnerIdDesired $PartnerIdDesired
     }
 
     Write-Host "[INFO] Connecting to Zero Trust Assessment (TenantId: $TenantId)..."
     Connect-ZtAssessment -TenantId $TenantId
 
-    Write-Host "[INFO] Running assessment..."
+    if ($LicenseReview) {
+        Invoke-LicenseReview -OutputPath $OutputPath -LicenseMapUrl $LicenseMapUrl
+    }
+
+    Write-Host "[INFO] Running Zero Trust Assessment..."
     Invoke-ZtAssessment -Path $OutputPath
 
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
@@ -218,13 +333,13 @@ catch {
     throw
 }
 finally {
-    # Visible cleanup (no confirmation prompts, best-effort)
     Write-Host "[INFO] Disconnecting sessions..."
 
+    # Simple disconnects (no -Force). Exchange needs -Confirm:$false.
     if (Get-Module -Name Az.Accounts -ErrorAction SilentlyContinue) {
-        Write-Host "[INFO] Disconnecting AzAccount (Process scope) and clearing context..."
-        Disconnect-AzAccount -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
-        Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "[INFO] Disconnecting AzAccount and clearing context..."
+        Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue | Out-Null
+        Clear-AzContext -Scope Process -ErrorAction SilentlyContinue | Out-Null
     }
 
     if (Get-Command Disconnect-MgGraph -ErrorAction SilentlyContinue) {
@@ -238,6 +353,10 @@ finally {
     }
 
     Write-Host "[INFO] Cleanup complete."
+
+    if ($OpenOutput) {
+        try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
+    }
 
     Invoke-SelfDelete -ScriptPath $scriptPath
 }
