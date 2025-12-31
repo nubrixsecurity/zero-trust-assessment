@@ -321,41 +321,14 @@ catch {
 finally {
     Write-Host "[INFO] Disconnecting sessions..."
 
-    Write-Host "[INFO] Disconnecting AzAccount..."
-    Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
-    
-    Write-Host "[INFO] Clearing Az context..."
-    Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
-    
+    Write-Host "[INFO] Disconnecting AzAccount and clearing context..."
+    Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue | Out-Null
+    Clear-AzContext -Scope Process -ErrorAction SilentlyContinue | Out-Null
+
     Write-Host "[INFO] Disconnecting Microsoft Graph..."
-    Disconnect-MgGraph -ErrorAction SilentlyContinue
-    
-    Write-Host "[INFO] Cleanup complete."
-    <#
-    Write-Host "[INFO] Disconnecting sessions..."
-
-    # Simple disconnects (no -Force). Exchange needs -Confirm:$false.
-    if (Get-Module -Name Az.Accounts -ErrorAction SilentlyContinue) {
-        Write-Host "[INFO] Disconnecting AzAccount and clearing context..."
-        Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue | Out-Null
-        Clear-AzContext -Scope Process -ErrorAction SilentlyContinue | Out-Null
-    }
-
-    if (Get-Command Disconnect-MgGraph -ErrorAction SilentlyContinue) {
-        Write-Host "[INFO] Disconnecting Microsoft Graph..."
-        Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
-    }
-
-    if (Get-Command Disconnect-ExchangeOnline -ErrorAction SilentlyContinue) {
-        Write-Host "[INFO] Disconnecting Exchange Online..."
-        Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-    }
-
-    Write-Host "[INFO] Cleanup complete."
-#>
-    if ($OpenOutput) {
-        try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
-    }
+    Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
 
     Invoke-SelfDelete -ScriptPath $scriptPath
+    
+    Write-Host "[INFO] Cleanup complete." 
 }
