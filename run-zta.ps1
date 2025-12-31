@@ -1,7 +1,7 @@
 <#
     FLAGS:
     -Partner
-    -PartnerIdDesired 7023112
+    -Partner -PartnerIdDesired 1234567
     -LicenseReview
 #>
 
