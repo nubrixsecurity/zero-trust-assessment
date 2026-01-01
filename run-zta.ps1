@@ -256,8 +256,12 @@ function Invoke-LicenseReview {
         }
     }
 
-    $csvOut = Join-Path $OutputPath "License_Review.csv"
+    $licenseFolder = Join-Path $OutputPath "License Review"
+    New-Item -Path $licenseFolder -ItemType Directory -Force | Out-Null
+    
+    $csvOut = Join-Path $licenseFolder "License_Review.csv"
     $licenseOverview | Export-Csv -Path $csvOut -NoTypeInformation -Encoding UTF8
+
 
     Write-Host "[INFO] License review exported: $csvOut"
 }
