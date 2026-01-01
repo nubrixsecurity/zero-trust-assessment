@@ -180,7 +180,6 @@ function Invoke-LicenseReview {
         [string]$LicenseMapUrl
     )
 
-    # Ensure Beta.Users is available (ZTA usually brings the rest). Do NOT Import-Module Graph modules.
     if (-not (Get-Module -ListAvailable -Name "Microsoft.Graph.Beta.Users")) {
         Write-Host "[INFO] Installing module: Microsoft.Graph.Beta.Users"
         Install-Module -Name "Microsoft.Graph.Beta.Users" -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
@@ -219,11 +218,9 @@ function Invoke-LicenseReview {
         Write-Host "[INFO] Connected to Microsoft Graph."
     }
 
-    # Folder for licensing outputs
     $licenseFolder = Join-Path $OutputPath "License Review"
     New-Item -Path $licenseFolder -ItemType Directory -Force | Out-Null
 
-    # Save mapping CSV in the same folder as License_Review.csv (per your request)
     $mapFileName = "Product names and service plan identifiers for licensing.csv"
     $mapPath = Join-Path $licenseFolder $mapFileName
 
@@ -267,26 +264,21 @@ function Invoke-LicenseReview {
 }
 #endregion License Review
 
-#region Secure Score (optional) - ensures permissions/scopes needed
-function Ensure-SecureScoreGraphAccess {
+#region Secure Score (optional) - REST-based to avoid Graph module collisions
+function Ensure-SecureScoreGraphScopes {
     [CmdletBinding()]
     param()
 
-    # Secure Score needs Graph Security + Org read (delegated)
     $secureScoreScopes = @("SecurityEvents.Read.All", "Organization.Read.All")
-
-    # Ensure module that provides Get-MgSecuritySecureScore exists
-    if (-not (Get-Module -ListAvailable -Name "Microsoft.Graph.Security")) {
-        Write-Host "[INFO] Installing module: Microsoft.Graph.Security"
-        Install-Module -Name "Microsoft.Graph.Security" -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-    }
 
     $ctx = Get-MgContext
     $needsConnect = $true
 
     if ($ctx -and $ctx.Scopes) {
         $missing = @($secureScoreScopes | Where-Object { $ctx.Scopes -notcontains $_ })
-        if ($missing.Count -eq 0) { $needsConnect = $false }
+        if ($missing.Count -eq 0) {
+            $needsConnect = $false
+        }
         else {
             Write-Host "[INFO] Secure Score missing Graph scopes: $($missing -join ', ')"
         }
@@ -298,7 +290,47 @@ function Ensure-SecureScoreGraphAccess {
     }
 }
 
+function Get-SecureScoreSnapshotLatest {
+    [CmdletBinding()]
+    param()
+
+    # v1.0 supports secureScores
+    $uri = "https://graph.microsoft.com/v1.0/security/secureScores?`$top=1"
+    $resp = Invoke-MgGraphRequest -Uri $uri -OutputType PSObject -ErrorAction Stop
+    $latest = $resp.value | Sort-Object createdDateTime -Descending | Select-Object -First 1
+    return $latest
+}
+
+function Get-SecureScoreSnapshotsAll {
+    [CmdletBinding()]
+    param()
+
+    # Pull all snapshots (paged via @odata.nextLink)
+    $uri = "https://graph.microsoft.com/v1.0/security/secureScores?`$top=500"
+    $all = @()
+
+    while ($uri) {
+        $resp = Invoke-MgGraphRequest -Uri $uri -OutputType PSObject -ErrorAction Stop
+        if ($resp.value) { $all += @($resp.value) }
+        $uri = $resp.'@odata.nextLink'
+    }
+
+    return $all
+}
+
+function Get-OrgDisplayNameViaGraph {
+    [CmdletBinding()]
+    param()
+
+    $uri = "https://graph.microsoft.com/v1.0/organization?`$select=displayName"
+    $resp = Invoke-MgGraphRequest -Uri $uri -OutputType PSObject -ErrorAction Stop
+    $name = $resp.value | Select-Object -First 1 -ExpandProperty displayName
+    if (-not $name) { $name = "Your Organization" }
+    return $name
+}
+
 function Get-SecureScoreAndChart {
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [string]$OutputPath,
@@ -307,19 +339,16 @@ function Get-SecureScoreAndChart {
     )
     # returns: @{ OrgName; Percentage; Current; MaxScore; CreatedDate; ChartPath; FolderPath }
 
-    $OrgName = try {
-        (Get-MgOrganization -Property DisplayName | Select-Object -First 1 -ExpandProperty DisplayName)
-    } catch {
-        "Your Organization"
-    }
+    $OrgName = "Your Organization"
+    try { $OrgName = Get-OrgDisplayNameViaGraph } catch {}
 
-    $score = Get-MgSecuritySecureScore -Top 1 | Sort-Object CreatedDateTime -Descending | Select-Object -First 1
-    if (-not $score) { throw "No Secure Score snapshot returned." }
+    $latest = Get-SecureScoreSnapshotLatest
+    if (-not $latest) { throw "No Secure Score snapshot returned." }
 
-    $MaxScore    = [int]$score.MaxScore
-    $Current     = [double]$score.CurrentScore
+    $MaxScore    = [int]$latest.maxScore
+    $Current     = [double]$latest.currentScore
     $Percentage  = if ($MaxScore -gt 0) { [math]::Round(($Current / $MaxScore) * 100, 2) } else { 0 }
-    $CreatedDate = (Get-Date $score.CreatedDateTime).ToString('MMMM d, yyyy')
+    $CreatedDate = (Get-Date $latest.createdDateTime).ToString('MMMM d, yyyy')
 
     $folderPath = Join-Path $OutputPath "Secure Score"
     New-Item -Path $folderPath -ItemType Directory -Force | Out-Null
@@ -331,15 +360,20 @@ function Get-SecureScoreAndChart {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Windows.Forms.DataVisualization
 
-    $snapshots = Get-MgSecuritySecureScore -All |
-        Sort-Object CreatedDateTime |
-        Group-Object { ([datetime]$_.CreatedDateTime).Date } |
-        ForEach-Object { $_.Group | Sort-Object CreatedDateTime -Descending | Select-Object -First 1 } |
-        Sort-Object CreatedDateTime
+    $snapshots = Get-SecureScoreSnapshotsAll |
+        Sort-Object createdDateTime |
+        Group-Object { ([datetime]$_.createdDateTime).Date } |
+        ForEach-Object { $_.Group | Sort-Object createdDateTime -Descending | Select-Object -First 1 } |
+        Sort-Object createdDateTime
 
     $trend = foreach ($s in $snapshots) {
-        $pct = if ($s.MaxScore -gt 0) { [math]::Round(($s.CurrentScore / $s.MaxScore) * 100, 2) } else { 0 }
-        [pscustomobject]@{ Date=[datetime]$s.CreatedDateTime; Percentage=$pct }
+        $pct = if ([double]$s.maxScore -gt 0) { [math]::Round(([double]$s.currentScore / [double]$s.maxScore) * 100, 2) } else { 0 }
+        [pscustomobject]@{ Date = [datetime]$s.createdDateTime; Percentage = $pct }
+    }
+
+    if (-not $trend -or $trend.Count -lt 2) {
+        # Still save a chart with whatever we have, but avoid min/max issues
+        $trend = @([pscustomobject]@{ Date = (Get-Date); Percentage = $Percentage })
     }
 
     $chart = New-Object System.Windows.Forms.DataVisualization.Charting.Chart
@@ -353,8 +387,11 @@ function Get-SecureScoreAndChart {
     $area.AxisY.Title = "Secure Score (%)"
 
     $ys = $trend | Select-Object -ExpandProperty Percentage
-    $area.AxisY.Minimum = [math]::Max(0,  [math]::Floor((($ys | Measure-Object -Minimum).Minimum) - 2))
-    $area.AxisY.Maximum = [math]::Min(100,[math]::Ceiling((($ys | Measure-Object -Maximum).Maximum) + 2))
+    $minY = ($ys | Measure-Object -Minimum).Minimum
+    $maxY = ($ys | Measure-Object -Maximum).Maximum
+
+    $area.AxisY.Minimum = [math]::Max(0,  [math]::Floor($minY - 2))
+    $area.AxisY.Maximum = [math]::Min(100,[math]::Ceiling($maxY + 2))
     $chart.ChartAreas.Add($area)
 
     $series = New-Object System.Windows.Forms.DataVisualization.Charting.Series "Secure Score"
@@ -389,7 +426,7 @@ function Invoke-SecureScoreExport {
         [string]$OutputPath
     )
 
-    Ensure-SecureScoreGraphAccess
+    Ensure-SecureScoreGraphScopes
 
     Write-Host "[INFO] Generating Secure Score chart..."
     $result = Get-SecureScoreAndChart -OutputPath $OutputPath
@@ -460,7 +497,12 @@ try {
     }
 
     if ($SecureScore) {
-        Invoke-SecureScoreExport -OutputPath $OutputPath
+        try {
+            Invoke-SecureScoreExport -OutputPath $OutputPath
+        }
+        catch {
+            Write-Host "[WARN] Secure Score export failed: $($_.Exception.Message)"
+        }
     }
 
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
@@ -482,4 +524,9 @@ finally {
     Invoke-SelfDelete -ScriptPath $scriptPath
 
     Write-Host "[INFO] Cleanup complete."
+
+    Write-Host ""
+    Write-Host "Press any key to exit..."
+    [void][System.Console]::ReadKey($true)
+    exit
 }
