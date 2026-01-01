@@ -401,6 +401,154 @@ function Invoke-SecureScoreExport {
 }
 #endregion Secure Score
 
+#region ZTA Report -> Actionable CSV (drop in $OutputPath)
+function Get-JsonArrayTextFromZtaHtml {
+    param([Parameter(Mandatory)][string]$Text)
+
+    $m = [regex]::Match($Text, '"TestId"\s*:\s*"?\d+"?')
+    if (-not $m.Success) { throw "Could not find TestId marker in the ZTA HTML report." }
+
+    $idx = $m.Index
+
+    $lb = -1
+    for ($i = $idx; $i -ge 0; $i--) {
+        if ($Text[$i] -eq '[') {
+            $tail = $Text.Substring($i, [Math]::Min(50, $Text.Length - $i))
+            if ($tail -match '^\[\s*\{') { $lb = $i; break }
+        }
+    }
+    if ($lb -lt 0) { throw "Could not find the start of the embedded results array in the HTML report." }
+
+    $depth = 0
+    $inString = $false
+    $esc = $false
+    $rb = -1
+
+    for ($j = $lb; $j -lt $Text.Length; $j++) {
+        $ch = $Text[$j]
+
+        if ($inString) {
+            if ($esc) { $esc = $false; continue }
+            if ($ch -eq '\') { $esc = $true; continue }
+            if ($ch -eq '"') { $inString = $false; continue }
+            continue
+        }
+
+        if ($ch -eq '"') { $inString = $true; continue }
+
+        if ($ch -eq '[') { $depth++ }
+        elseif ($ch -eq ']') {
+            $depth--
+            if ($depth -eq 0) { $rb = $j; break }
+        }
+    }
+
+    if ($rb -lt 0) { throw "Could not find the end of the embedded results array in the HTML report." }
+
+    return $Text.Substring($lb, ($rb - $lb + 1))
+}
+
+function Get-ZtaRemediationText {
+    param([string]$Desc)
+
+    if ([string]::IsNullOrWhiteSpace($Desc)) { return "" }
+
+    $marker = "**Remediation action**"
+    $pos = $Desc.IndexOf($marker)
+    if ($pos -lt 0) { return "" }
+
+    return $Desc.Substring($pos + $marker.Length).Trim()
+}
+
+function Export-ZtaActionableCsv {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$OutputPath
+    )
+
+    # Locate the HTML report in the output folder (newest HTML wins)
+    $htmlReportPath = Get-ChildItem -Path $OutputPath -Filter "*.html" -File -ErrorAction Stop |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1 -ExpandProperty FullName
+
+    if (-not $htmlReportPath) {
+        throw "No HTML report found in output folder: $OutputPath"
+    }
+
+    $html = Get-Content -Path $htmlReportPath -Raw -Encoding UTF8
+
+    $jsonText = Get-JsonArrayTextFromZtaHtml -Text $html
+    $jsonText = $jsonText -replace ',(\s*[}\]])', '$1'  # remove common trailing commas
+
+    $tests = $jsonText | ConvertFrom-Json
+
+    $linkRegex = '\[([^\]]+)\]\((https?://[^)]+)\)'
+    $linkLookup = @{}
+
+    foreach ($t in $tests) {
+        $rem = Get-ZtaRemediationText -Desc ([string]$t.TestDescription)
+        if ([string]::IsNullOrWhiteSpace($rem)) { continue }
+
+        $urls = [regex]::Matches($rem, $linkRegex) |
+            ForEach-Object { $_.Groups[2].Value } |
+            Select-Object -Unique
+
+        if ($urls -and $urls.Count -gt 0) {
+            $linkLookup["$($t.TestId)"] = ($urls -join " | ")
+        }
+    }
+
+    $rows = foreach ($t in $tests) {
+        $rem = Get-ZtaRemediationText -Desc ([string]$t.TestDescription)
+
+        [pscustomobject]@{
+            TestId                  = $t.TestId
+            TestTitle               = $t.TestTitle
+            TestStatus              = $t.TestStatus
+            TestPillar              = $t.TestPillar
+            TestSfiPillar           = $t.TestSfiPillar
+            TestCategory            = $t.TestCategory
+            TestRisk                = $t.TestRisk
+            TestImpact              = $t.TestImpact
+            TestMinimumLicense      = $t.TestMinimumLicense
+            TestImplementationCost   = $t.TestImplementationCost
+            RemediationActions      = $rem
+            TestResult              = $t.TestResult
+            RemediationLinks        = $linkLookup["$($t.TestId)"]
+        }
+    }
+
+    $outCsv = Join-Path $OutputPath "ZeroTrustAssessment_Actionable.csv"
+    $rows | Export-Csv -Path $outCsv -NoTypeInformation -Encoding UTF8
+
+    $links = foreach ($t in $tests) {
+        $rem = Get-ZtaRemediationText -Desc ([string]$t.TestDescription)
+        if ([string]::IsNullOrWhiteSpace($rem)) { continue }
+
+        $matches = [regex]::Matches($rem, $linkRegex)
+        foreach ($m in $matches) {
+            [pscustomobject]@{
+                TestId    = $t.TestId
+                TestTitle = $t.TestTitle
+                LinkText  = $m.Groups[1].Value
+                Url       = $m.Groups[2].Value
+            }
+        }
+    }
+
+    $outLinks = Join-Path $OutputPath "ZeroTrustAssessment_RemediationLinks.csv"
+    $links | Export-Csv -Path $outLinks -NoTypeInformation -Encoding UTF8
+
+    return @{
+        HtmlReport = $htmlReportPath
+        ActionableCsv = $outCsv
+        LinksCsv = $outLinks
+        RowCount = ($rows | Measure-Object).Count
+    }
+}
+#endregion ZTA Report -> Actionable CSV
+
 #region Self-delete (best-effort)
 function Invoke-SelfDelete {
     param(
@@ -439,6 +587,16 @@ try {
 
     Write-Host "[INFO] Running Zero Trust Assessment..."
     Invoke-ZtAssessment -Path $OutputPath
+
+    # Export actionable CSV(s) into the same output folder
+    try {
+        $export = Export-ZtaActionableCsv -OutputPath $OutputPath
+        Write-Host "[INFO] Exported actionable CSV to: $($export.ActionableCsv)"
+        Write-Host "[INFO] Exported remediation links CSV to: $($export.LinksCsv)"
+    }
+    catch {
+        Write-Host "[WARN] HTML-to-CSV export failed: $($_.Exception.Message)"
+    }
 
     if ($Partner) {
         Set-ManagementPartnerAssociationSilent -TenantId $TenantId -PartnerIdDesired $PartnerIdDesired
