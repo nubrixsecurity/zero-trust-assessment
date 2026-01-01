@@ -564,4 +564,6 @@ finally {
 
     Write-Host ""
     Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
+    [void][System.Console]::ReadKey($true)
+    Write-Host ""
 }
