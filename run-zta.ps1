@@ -334,15 +334,25 @@ function Get-SecureScoreAndChart {
     param(
         [Parameter(Mandatory = $true)]
         [string]$OutputPath,
+
         [int]$ChartWidth  = 1200,
         [int]$ChartHeight = 600
     )
     # returns: @{ OrgName; Percentage; Current; MaxScore; CreatedDate; ChartPath; FolderPath }
 
+    # --- Org name (best-effort, REST) ---
     $OrgName = "Your Organization"
-    try { $OrgName = Get-OrgDisplayNameViaGraph } catch {}
+    try {
+        $uri = "https://graph.microsoft.com/v1.0/organization?`$select=displayName"
+        $resp = Invoke-MgGraphRequest -Uri $uri -OutputType PSObject -ErrorAction Stop
+        $OrgName = $resp.value | Select-Object -First 1 -ExpandProperty displayName
+        if (-not $OrgName) { $OrgName = "Your Organization" }
+    } catch {}
 
-    $latest = Get-SecureScoreSnapshotLatest
+    # --- Latest snapshot (REST) ---
+    $latestUri = "https://graph.microsoft.com/v1.0/security/secureScores?`$top=1"
+    $latestResp = Invoke-MgGraphRequest -Uri $latestUri -OutputType PSObject -ErrorAction Stop
+    $latest = $latestResp.value | Sort-Object createdDateTime -Descending | Select-Object -First 1
     if (-not $latest) { throw "No Secure Score snapshot returned." }
 
     $MaxScore    = [int]$latest.maxScore
@@ -350,17 +360,24 @@ function Get-SecureScoreAndChart {
     $Percentage  = if ($MaxScore -gt 0) { [math]::Round(($Current / $MaxScore) * 100, 2) } else { 0 }
     $CreatedDate = (Get-Date $latest.createdDateTime).ToString('MMMM d, yyyy')
 
+    # --- Output paths ---
     $folderPath = Join-Path $OutputPath "Secure Score"
     New-Item -Path $folderPath -ItemType Directory -Force | Out-Null
 
-    $safeScore = [math]::Round($Current, 0)
-    $chartFile = "SecureScore_Trend_{0}.png" -f $safeScore
+    $safePct = ($Percentage.ToString("0.00") -replace '\.','_')
+    $chartFile = "SecureScore_Trend_{0}pct.png" -f $safePct
     $chartPath = Join-Path $folderPath $chartFile
 
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Windows.Forms.DataVisualization
+    # --- Pull all snapshots (paged) ---
+    $uri = "https://graph.microsoft.com/v1.0/security/secureScores?`$top=500"
+    $all = @()
+    while ($uri) {
+        $r = Invoke-MgGraphRequest -Uri $uri -OutputType PSObject -ErrorAction Stop
+        if ($r.value) { $all += @($r.value) }
+        $uri = $r.'@odata.nextLink'
+    }
 
-    $snapshots = Get-SecureScoreSnapshotsAll |
+    $snapshots = $all |
         Sort-Object createdDateTime |
         Group-Object { ([datetime]$_.createdDateTime).Date } |
         ForEach-Object { $_.Group | Sort-Object createdDateTime -Descending | Select-Object -First 1 } |
@@ -372,26 +389,40 @@ function Get-SecureScoreAndChart {
     }
 
     if (-not $trend -or $trend.Count -lt 2) {
-        # Still save a chart with whatever we have, but avoid min/max issues
         $trend = @([pscustomobject]@{ Date = (Get-Date); Percentage = $Percentage })
     }
 
+    # --- Chart rendering ---
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Windows.Forms.DataVisualization
+    Add-Type -AssemblyName System.Drawing
+
     $chart = New-Object System.Windows.Forms.DataVisualization.Charting.Chart
-    $chart.Width = $ChartWidth
+    $chart.Width  = $ChartWidth
     $chart.Height = $ChartHeight
+    $chart.BackColor = [System.Drawing.Color]::White
 
     $area = New-Object System.Windows.Forms.DataVisualization.Charting.ChartArea "Main"
+    $area.BackColor = [System.Drawing.Color]::White
+
+    # X axis (months)
     $area.AxisX.Interval = 1
     $area.AxisX.LabelStyle.Format = "MMM"
     $area.AxisX.MajorGrid.Enabled = $false
+    $area.AxisX.LabelStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+
+    # Y axis
     $area.AxisY.Title = "Secure Score (%)"
+    $area.AxisY.MajorGrid.LineColor = [System.Drawing.Color]::Gainsboro
+    $area.AxisY.LabelStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $area.AxisY.TitleFont = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 
     $ys = $trend | Select-Object -ExpandProperty Percentage
     $minY = ($ys | Measure-Object -Minimum).Minimum
     $maxY = ($ys | Measure-Object -Maximum).Maximum
-
     $area.AxisY.Minimum = [math]::Max(0,  [math]::Floor($minY - 2))
     $area.AxisY.Maximum = [math]::Min(100,[math]::Ceiling($maxY + 2))
+
     $chart.ChartAreas.Add($area)
 
     $series = New-Object System.Windows.Forms.DataVisualization.Charting.Series "Secure Score"
@@ -402,10 +433,14 @@ function Get-SecureScoreAndChart {
     foreach ($row in $trend) { [void]$series.Points.AddXY($row.Date, $row.Percentage) }
     $chart.Series.Add($series)
 
+    # Title (bigger + bold, percent only)
     $title = New-Object System.Windows.Forms.DataVisualization.Charting.Title
-    $title.Text = ("Secure Score: {0}/{1} ({2}%)" -f [math]::Round($Current,0), $MaxScore, $Percentage)
+    $title.Text = ("Secure Score {0}%" -f $Percentage.ToString("0.00"))
+    $title.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
+    $chart.Titles.Clear()
     $chart.Titles.Add($title)
 
+    # Save
     $chart.SaveImage($chartPath, "Png")
 
     return @{
