@@ -560,8 +560,8 @@ finally {
 
     Write-Host "[INFO] Cleanup complete."
 
+    try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
+
     Write-Host ""
-    Write-Host "Press any key to exit..."
-    [void][System.Console]::ReadKey($true)
-    exit
+    Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
 }
