@@ -53,8 +53,6 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 }
 
 New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
-Write-Host "[INFO] PowerShell version: $($PSVersionTable.PSVersion)"
-Write-Host "[INFO] OutputPath: $OutputPath"
 #endregion Output path
 
 #region Ensure module installed (install only if missing)
@@ -70,7 +68,6 @@ function Ensure-ModuleInstalled {
     $installed = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
 
     if (-not $installed) {
-        Write-Host "[INFO] Installing $Name (CurrentUser)..."
         $oldWP = $WarningPreference
         $oldPP = $ProgressPreference
         $WarningPreference = 'SilentlyContinue'
@@ -85,10 +82,7 @@ function Ensure-ModuleInstalled {
         return
     }
 
-    Write-Host "[INFO] $Name already installed (v$($installed.Version))."
-
     if ($Update) {
-        Write-Host "[INFO] Updating $Name (CurrentUser)..."
         $oldWP = $WarningPreference
         $oldPP = $ProgressPreference
         $WarningPreference = 'SilentlyContinue'
@@ -181,7 +175,6 @@ function Invoke-LicenseReview {
     )
 
     if (-not (Get-Module -ListAvailable -Name "Microsoft.Graph.Beta.Users")) {
-        Write-Host "[INFO] Installing module: Microsoft.Graph.Beta.Users"
         Install-Module -Name "Microsoft.Graph.Beta.Users" -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
     }
 
@@ -200,22 +193,11 @@ function Invoke-LicenseReview {
         foreach ($perm in $requiredPerms) {
             if ($ctx.Scopes -notcontains $perm) { $missing += $perm }
         }
-
-        if ($missing.Count -eq 0) {
-            $hasAllPerms = $true
-            Write-Host "[INFO] Microsoft Graph already connected with required permissions."
-        }
-        else {
-            Write-Host "[INFO] Reconnecting to Microsoft Graph to include required permissions..."
-        }
-    }
-    else {
-        Write-Host "[INFO] Connecting to Microsoft Graph..."
+        if ($missing.Count -eq 0) { $hasAllPerms = $true }
     }
 
     if (-not $hasAllPerms) {
         Connect-MgGraph -Scopes $requiredPerms -NoWelcome -ErrorAction Stop | Out-Null
-        Write-Host "[INFO] Connected to Microsoft Graph."
     }
 
     $licenseFolder = Join-Path $OutputPath "License Review"
@@ -225,7 +207,6 @@ function Invoke-LicenseReview {
     $mapPath = Join-Path $licenseFolder $mapFileName
 
     if (-not (Test-Path -LiteralPath $mapPath)) {
-        Write-Host "[INFO] Downloading license map CSV..."
         Invoke-WebRequest -Uri $LicenseMapUrl -OutFile $mapPath -ErrorAction Stop
     }
 
@@ -259,8 +240,6 @@ function Invoke-LicenseReview {
 
     $csvOut = Join-Path $licenseFolder "License_Review.csv"
     $licenseOverview | Export-Csv -Path $csvOut -NoTypeInformation -Encoding UTF8
-
-    Write-Host "[INFO] License review exported: $csvOut"
 }
 #endregion License Review
 
@@ -276,57 +255,12 @@ function Ensure-SecureScoreGraphScopes {
 
     if ($ctx -and $ctx.Scopes) {
         $missing = @($secureScoreScopes | Where-Object { $ctx.Scopes -notcontains $_ })
-        if ($missing.Count -eq 0) {
-            $needsConnect = $false
-        }
-        else {
-            Write-Host "[INFO] Secure Score missing Graph scopes: $($missing -join ', ')"
-        }
+        if ($missing.Count -eq 0) { $needsConnect = $false }
     }
 
     if ($needsConnect) {
-        Write-Host "[INFO] Connecting to Microsoft Graph for Secure Score..."
         Connect-MgGraph -Scopes $secureScoreScopes -NoWelcome -ErrorAction Stop | Out-Null
     }
-}
-
-function Get-SecureScoreSnapshotLatest {
-    [CmdletBinding()]
-    param()
-
-    # v1.0 supports secureScores
-    $uri = "https://graph.microsoft.com/v1.0/security/secureScores?`$top=1"
-    $resp = Invoke-MgGraphRequest -Uri $uri -OutputType PSObject -ErrorAction Stop
-    $latest = $resp.value | Sort-Object createdDateTime -Descending | Select-Object -First 1
-    return $latest
-}
-
-function Get-SecureScoreSnapshotsAll {
-    [CmdletBinding()]
-    param()
-
-    # Pull all snapshots (paged via @odata.nextLink)
-    $uri = "https://graph.microsoft.com/v1.0/security/secureScores?`$top=500"
-    $all = @()
-
-    while ($uri) {
-        $resp = Invoke-MgGraphRequest -Uri $uri -OutputType PSObject -ErrorAction Stop
-        if ($resp.value) { $all += @($resp.value) }
-        $uri = $resp.'@odata.nextLink'
-    }
-
-    return $all
-}
-
-function Get-OrgDisplayNameViaGraph {
-    [CmdletBinding()]
-    param()
-
-    $uri = "https://graph.microsoft.com/v1.0/organization?`$select=displayName"
-    $resp = Invoke-MgGraphRequest -Uri $uri -OutputType PSObject -ErrorAction Stop
-    $name = $resp.value | Select-Object -First 1 -ExpandProperty displayName
-    if (-not $name) { $name = "Your Organization" }
-    return $name
 }
 
 function Get-SecureScoreAndChart {
@@ -340,7 +274,6 @@ function Get-SecureScoreAndChart {
     )
     # returns: @{ OrgName; Percentage; Current; MaxScore; CreatedDate; ChartPath; FolderPath }
 
-    # --- Org name (best-effort, REST) ---
     $OrgName = "Your Organization"
     try {
         $uri = "https://graph.microsoft.com/v1.0/organization?`$select=displayName"
@@ -349,7 +282,6 @@ function Get-SecureScoreAndChart {
         if (-not $OrgName) { $OrgName = "Your Organization" }
     } catch {}
 
-    # --- Latest snapshot (REST) ---
     $latestUri = "https://graph.microsoft.com/v1.0/security/secureScores?`$top=1"
     $latestResp = Invoke-MgGraphRequest -Uri $latestUri -OutputType PSObject -ErrorAction Stop
     $latest = $latestResp.value | Sort-Object createdDateTime -Descending | Select-Object -First 1
@@ -360,7 +292,6 @@ function Get-SecureScoreAndChart {
     $Percentage  = if ($MaxScore -gt 0) { [math]::Round(($Current / $MaxScore) * 100, 2) } else { 0 }
     $CreatedDate = (Get-Date $latest.createdDateTime).ToString('MMMM d, yyyy')
 
-    # --- Output paths ---
     $folderPath = Join-Path $OutputPath "Secure Score"
     New-Item -Path $folderPath -ItemType Directory -Force | Out-Null
 
@@ -368,7 +299,6 @@ function Get-SecureScoreAndChart {
     $chartFile = "SecureScore_Trend_{0}pct.png" -f $safePct
     $chartPath = Join-Path $folderPath $chartFile
 
-    # --- Pull all snapshots (paged) ---
     $uri = "https://graph.microsoft.com/v1.0/security/secureScores?`$top=500"
     $all = @()
     while ($uri) {
@@ -392,7 +322,6 @@ function Get-SecureScoreAndChart {
         $trend = @([pscustomobject]@{ Date = (Get-Date); Percentage = $Percentage })
     }
 
-    # --- Chart rendering ---
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Windows.Forms.DataVisualization
     Add-Type -AssemblyName System.Drawing
@@ -405,13 +334,11 @@ function Get-SecureScoreAndChart {
     $area = New-Object System.Windows.Forms.DataVisualization.Charting.ChartArea "Main"
     $area.BackColor = [System.Drawing.Color]::White
 
-    # X axis (months)
     $area.AxisX.Interval = 1
     $area.AxisX.LabelStyle.Format = "MMM"
     $area.AxisX.MajorGrid.Enabled = $false
     $area.AxisX.LabelStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
-    # Y axis
     $area.AxisY.Title = "Secure Score (%)"
     $area.AxisY.MajorGrid.LineColor = [System.Drawing.Color]::Gainsboro
     $area.AxisY.LabelStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9)
@@ -433,14 +360,12 @@ function Get-SecureScoreAndChart {
     foreach ($row in $trend) { [void]$series.Points.AddXY($row.Date, $row.Percentage) }
     $chart.Series.Add($series)
 
-    # Title (bigger + bold, percent only)
     $title = New-Object System.Windows.Forms.DataVisualization.Charting.Title
     $title.Text = ("Secure Score {0}%" -f $Percentage.ToString("0.00"))
     $title.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
     $chart.Titles.Clear()
     $chart.Titles.Add($title)
 
-    # Save
     $chart.SaveImage($chartPath, "Png")
 
     return @{
@@ -462,8 +387,6 @@ function Invoke-SecureScoreExport {
     )
 
     Ensure-SecureScoreGraphScopes
-
-    Write-Host "[INFO] Generating Secure Score chart..."
     $result = Get-SecureScoreAndChart -OutputPath $OutputPath
 
     $summaryPath = Join-Path $result.FolderPath "SecureScore_Summary.csv"
@@ -475,9 +398,6 @@ function Invoke-SecureScoreExport {
         CreatedDate = $result.CreatedDate
         ChartPath   = $result.ChartPath
     } | Export-Csv -Path $summaryPath -NoTypeInformation -Encoding UTF8
-
-    Write-Host "[INFO] Secure Score exported: $($result.ChartPath)"
-    Write-Host "[INFO] Secure Score summary:  $summaryPath"
 }
 #endregion Secure Score
 
@@ -489,7 +409,6 @@ function Invoke-SelfDelete {
     )
 
     if ($NoSelfDelete) {
-        Write-Host "[INFO] Self-delete disabled (-NoSelfDelete). Script left at: $ScriptPath"
         return
     }
 
@@ -500,10 +419,9 @@ function Invoke-SelfDelete {
     try {
         $cmd = "/c ping 127.0.0.1 -n 3 > nul & del /f /q `"$ScriptPath`""
         Start-Process -FilePath "cmd.exe" -ArgumentList $cmd -WindowStyle Hidden | Out-Null
-        Write-Host "[INFO] Scheduled self-delete for: $ScriptPath"
     }
     catch {
-        Write-Warning "Unable to schedule self-delete for $ScriptPath. Error: $($_.Exception.Message)"
+        # best-effort
     }
 }
 #endregion Self-delete
@@ -513,7 +431,6 @@ $scriptPath = $MyInvocation.MyCommand.Path
 try {
     Ensure-ModuleInstalled -Name "ZeroTrustAssessment" -Update:$UpdateModules
 
-    Write-Host "[INFO] Clearing Az config and setting default subscription for login..."
     Clear-AzConfig -Scope CurrentUser -Force -ErrorAction Ignore | Out-Null
     Update-AzConfig -DefaultSubscriptionForLogin $SubscriptionId -Scope CurrentUser | Out-Null
 
@@ -547,19 +464,14 @@ catch {
     throw
 }
 finally {
-    Write-Host "[INFO] Disconnecting sessions..."
-
-    Write-Host "[INFO] Disconnecting AzAccount and clearing context..."
+    # Always attempt to disconnect; keep silent
     $null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
     $null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
-
-    Write-Host "[INFO] Disconnecting Microsoft Graph..."
     $null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
     Invoke-SelfDelete -ScriptPath $scriptPath
 
-    Write-Host "[INFO] Cleanup complete."
-
+    # Open run folder; if it fails, do nothing (path is already shown in the final [INFO] line)
     try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
 
     Write-Host ""
