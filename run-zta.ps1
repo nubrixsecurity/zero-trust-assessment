@@ -596,7 +596,6 @@ try {
     # Export actionable CSV and organize assessment artifacts into: Assessment Report\
     try {
         $export = Export-ZtaActionableCsv -OutputPath $OutputPath
-        Write-Host "[INFO] Exported actionable CSV to: $($export.ActionableCsv)"
     }
     catch {
         Write-Host "[WARN] HTML-to-CSV export/organization failed: $($_.Exception.Message)"
