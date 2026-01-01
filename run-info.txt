@@ -6,4 +6,4 @@ $p = Join-Path $env:TEMP "run-zta.ps1"
 
 Invoke-WebRequest -Uri $u -OutFile $p
 
-pwsh -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId
+pwsh -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId -LicenseReview -SecureScore -Partner
