@@ -401,7 +401,7 @@ function Invoke-SecureScoreExport {
 }
 #endregion Secure Score
 
-#region ZTA Report -> Actionable CSV (drop in $OutputPath)
+#region ZTA Report -> Actionable CSV + folder structure
 function Get-JsonArrayTextFromZtaHtml {
     param([Parameter(Mandatory)][string]$Text)
 
@@ -467,7 +467,10 @@ function Export-ZtaActionableCsv {
         [string]$OutputPath
     )
 
-    # Locate the HTML report in the output folder (newest HTML wins)
+    $assessmentFolder = Join-Path $OutputPath "Assessment Report"
+    New-Item -Path $assessmentFolder -ItemType Directory -Force | Out-Null
+
+    # Find newest HTML report in root output folder
     $htmlReportPath = Get-ChildItem -Path $OutputPath -Filter "*.html" -File -ErrorAction Stop |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1 -ExpandProperty FullName
@@ -480,9 +483,9 @@ function Export-ZtaActionableCsv {
 
     $jsonText = Get-JsonArrayTextFromZtaHtml -Text $html
     $jsonText = $jsonText -replace ',(\s*[}\]])', '$1'  # remove common trailing commas
-
     $tests = $jsonText | ConvertFrom-Json
 
+    # Build RemediationLinks column (joined URLs)
     $linkRegex = '\[([^\]]+)\]\((https?://[^)]+)\)'
     $linkLookup = @{}
 
@@ -503,51 +506,53 @@ function Export-ZtaActionableCsv {
         $rem = Get-ZtaRemediationText -Desc ([string]$t.TestDescription)
 
         [pscustomobject]@{
-            TestId                  = $t.TestId
-            TestTitle               = $t.TestTitle
-            TestStatus              = $t.TestStatus
-            TestPillar              = $t.TestPillar
-            TestSfiPillar           = $t.TestSfiPillar
-            TestCategory            = $t.TestCategory
-            TestRisk                = $t.TestRisk
-            TestImpact              = $t.TestImpact
-            TestMinimumLicense      = $t.TestMinimumLicense
-            TestImplementationCost   = $t.TestImplementationCost
-            RemediationActions      = $rem
-            TestResult              = $t.TestResult
-            RemediationLinks        = $linkLookup["$($t.TestId)"]
+            TestId                 = $t.TestId
+            TestTitle              = $t.TestTitle
+            TestStatus             = $t.TestStatus
+            TestPillar             = $t.TestPillar
+            TestSfiPillar          = $t.TestSfiPillar
+            TestCategory           = $t.TestCategory
+            TestRisk               = $t.TestRisk
+            TestImpact             = $t.TestImpact
+            TestMinimumLicense     = $t.TestMinimumLicense
+            TestImplementationCost = $t.TestImplementationCost
+            RemediationActions     = $rem
+            TestResult             = $t.TestResult
+            RemediationLinks       = $linkLookup["$($t.TestId)"]
         }
     }
 
-    $outCsv = Join-Path $OutputPath "ZeroTrustAssessment_Actionable.csv"
+    # Export actionable CSV into Assessment Report folder
+    $outCsv = Join-Path $assessmentFolder "ZeroTrustAssessment_Actionable.csv"
     $rows | Export-Csv -Path $outCsv -NoTypeInformation -Encoding UTF8
 
-    $links = foreach ($t in $tests) {
-        $rem = Get-ZtaRemediationText -Desc ([string]$t.TestDescription)
-        if ([string]::IsNullOrWhiteSpace($rem)) { continue }
-
-        $matches = [regex]::Matches($rem, $linkRegex)
-        foreach ($m in $matches) {
-            [pscustomobject]@{
-                TestId    = $t.TestId
-                TestTitle = $t.TestTitle
-                LinkText  = $m.Groups[1].Value
-                Url       = $m.Groups[2].Value
-            }
+    # Move the HTML report into Assessment Report folder
+    try {
+        $destHtml = Join-Path $assessmentFolder (Split-Path $htmlReportPath -Leaf)
+        if ($htmlReportPath -ne $destHtml) {
+            Move-Item -LiteralPath $htmlReportPath -Destination $destHtml -Force -ErrorAction Stop
         }
-    }
+    } catch {}
 
-    $outLinks = Join-Path $OutputPath "ZeroTrustAssessment_RemediationLinks.csv"
-    $links | Export-Csv -Path $outLinks -NoTypeInformation -Encoding UTF8
+    # Move zt-export folder into Assessment Report folder (if present)
+    try {
+        $ztExportPath = Join-Path $OutputPath "zt-export"
+        if (Test-Path -LiteralPath $ztExportPath) {
+            $destZtExport = Join-Path $assessmentFolder "zt-export"
+            if (Test-Path -LiteralPath $destZtExport) {
+                Remove-Item -LiteralPath $destZtExport -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            Move-Item -LiteralPath $ztExportPath -Destination $destZtExport -Force -ErrorAction Stop
+        }
+    } catch {}
 
     return @{
-        HtmlReport = $htmlReportPath
-        ActionableCsv = $outCsv
-        LinksCsv = $outLinks
-        RowCount = ($rows | Measure-Object).Count
+        AssessmentFolder = $assessmentFolder
+        ActionableCsv    = $outCsv
+        RowCount         = ($rows | Measure-Object).Count
     }
 }
-#endregion ZTA Report -> Actionable CSV
+#endregion ZTA Report -> Actionable CSV + folder structure
 
 #region Self-delete (best-effort)
 function Invoke-SelfDelete {
@@ -588,14 +593,13 @@ try {
     Write-Host "[INFO] Running Zero Trust Assessment..."
     Invoke-ZtAssessment -Path $OutputPath
 
-    # Export actionable CSV(s) into the same output folder
+    # Export actionable CSV and organize assessment artifacts into: Assessment Report\
     try {
         $export = Export-ZtaActionableCsv -OutputPath $OutputPath
         Write-Host "[INFO] Exported actionable CSV to: $($export.ActionableCsv)"
-        Write-Host "[INFO] Exported remediation links CSV to: $($export.LinksCsv)"
     }
     catch {
-        Write-Host "[WARN] HTML-to-CSV export failed: $($_.Exception.Message)"
+        Write-Host "[WARN] HTML-to-CSV export/organization failed: $($_.Exception.Message)"
     }
 
     if ($Partner) {
