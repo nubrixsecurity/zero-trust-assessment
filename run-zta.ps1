@@ -3,6 +3,7 @@
     -Partner
     -Partner -PartnerIdDesired 1234567
     -LicenseReview
+    -SecureScore
 #>
 
 [CmdletBinding()]
@@ -35,6 +36,9 @@ param(
 
     [Parameter(Mandatory = $false)]
     [string]$LicenseMapUrl = "https://raw.githubusercontent.com/nubrixsecurity/zero-trust-assessment/main/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SecureScore,
 
     [Parameter(Mandatory = $false)]
     [switch]$OpenOutput
@@ -100,7 +104,7 @@ function Ensure-ModuleInstalled {
 }
 #endregion Ensure module installed
 
-#region Partner association (COMPLETELY SILENT)
+#region Partner association (COMPLETELY SILENT; assumes ZTA already authenticated)
 function Set-ManagementPartnerAssociationSilent {
     [CmdletBinding()]
     param(
@@ -125,21 +129,17 @@ function Set-ManagementPartnerAssociationSilent {
         $InformationPreference = 'SilentlyContinue'
         $ProgressPreference    = 'SilentlyContinue'
 
-        # Only ensure the Partner module exists; do not connect/auth here.
         if (-not (Get-Module -ListAvailable -Name Az.ManagementPartner)) {
             Install-Module Az.ManagementPartner -Scope CurrentUser -Force -AllowClobber -WarningAction SilentlyContinue | Out-Null
         }
 
-        # Do NOT Import-Module unless needed
         if (-not (Get-Module -Name Az.ManagementPartner)) {
             Import-Module Az.ManagementPartner -ErrorAction SilentlyContinue | Out-Null
         }
 
-        # Assume Az context already exists from ZTA run
         $ctx = Get-AzContext -ErrorAction SilentlyContinue
         if (-not $ctx) { return }
 
-        # Optional safety: if tenant doesn't match, do nothing (still silent)
         $ctxTenant = $null
         if ($ctx.Tenant) {
             if ($ctx.Tenant.Id) { $ctxTenant = $ctx.Tenant.Id }
@@ -180,7 +180,6 @@ function Invoke-LicenseReview {
         [string]$LicenseMapUrl
     )
 
-    # Ensure Beta.Users is available (ZTA usually brings the rest). Do NOT Import-Module Graph modules.
     if (-not (Get-Module -ListAvailable -Name "Microsoft.Graph.Beta.Users")) {
         Write-Host "[INFO] Installing module: Microsoft.Graph.Beta.Users"
         Install-Module -Name "Microsoft.Graph.Beta.Users" -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
@@ -219,7 +218,6 @@ function Invoke-LicenseReview {
         Write-Host "[INFO] Connected to Microsoft Graph."
     }
 
-    # Download mapping CSV into the run folder
     $mapFileName = "Product names and service plan identifiers for licensing.csv"
     $mapPath = Join-Path $OutputPath $mapFileName
 
@@ -258,14 +256,124 @@ function Invoke-LicenseReview {
 
     $licenseFolder = Join-Path $OutputPath "License Review"
     New-Item -Path $licenseFolder -ItemType Directory -Force | Out-Null
-    
+
     $csvOut = Join-Path $licenseFolder "License_Review.csv"
     $licenseOverview | Export-Csv -Path $csvOut -NoTypeInformation -Encoding UTF8
-
 
     Write-Host "[INFO] License review exported: $csvOut"
 }
 #endregion License Review
+
+#region Secure Score (optional)
+function Get-SecureScoreAndChart {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$OutputPath,
+        [int]$ChartWidth  = 1200,
+        [int]$ChartHeight = 600
+    )
+    # returns: @{ OrgName; Percentage; Current; MaxScore; CreatedDate; ChartPath; FolderPath }
+
+    $OrgName = try {
+        (Get-MgOrganization -Property DisplayName | Select-Object -First 1 -ExpandProperty DisplayName)
+    } catch {
+        "Your Organization"
+    }
+
+    $score = Get-MgSecuritySecureScore -Top 1 | Sort-Object CreatedDateTime -Descending | Select-Object -First 1
+    if (-not $score) { throw "No Secure Score snapshot returned." }
+
+    $MaxScore    = [int]$score.MaxScore
+    $Current     = [double]$score.CurrentScore
+    $Percentage  = if ($MaxScore -gt 0) { [math]::Round(($Current / $MaxScore) * 100, 2) } else { 0 }
+    $CreatedDate = (Get-Date $score.CreatedDateTime).ToString('MMMM d, yyyy')
+
+    $folderPath = Join-Path $OutputPath "Secure Score"
+    New-Item -Path $folderPath -ItemType Directory -Force | Out-Null
+
+    $safeScore = [math]::Round($Current, 0)
+    $chartFile = "SecureScore_Trend_{0}.png" -f $safeScore
+    $chartPath = Join-Path $folderPath $chartFile
+
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Windows.Forms.DataVisualization
+
+    $snapshots = Get-MgSecuritySecureScore -All |
+        Sort-Object CreatedDateTime |
+        Group-Object { ([datetime]$_.CreatedDateTime).Date } |
+        ForEach-Object { $_.Group | Sort-Object CreatedDateTime -Descending | Select-Object -First 1 } |
+        Sort-Object CreatedDateTime
+
+    $trend = foreach ($s in $snapshots) {
+        $pct = if ($s.MaxScore -gt 0) { [math]::Round(($s.CurrentScore / $s.MaxScore) * 100, 2) } else { 0 }
+        [pscustomobject]@{ Date=[datetime]$s.CreatedDateTime; Percentage=$pct }
+    }
+
+    $chart = New-Object System.Windows.Forms.DataVisualization.Charting.Chart
+    $chart.Width = $ChartWidth
+    $chart.Height = $ChartHeight
+
+    $area = New-Object System.Windows.Forms.DataVisualization.Charting.ChartArea "Main"
+    $area.AxisX.Interval = 1
+    $area.AxisX.LabelStyle.Format = "MMM"
+    $area.AxisX.MajorGrid.Enabled = $false
+    $area.AxisY.Title = "Secure Score (%)"
+
+    $ys = $trend | Select-Object -ExpandProperty Percentage
+    $area.AxisY.Minimum = [math]::Max(0,  [math]::Floor((($ys | Measure-Object -Minimum).Minimum) - 2))
+    $area.AxisY.Maximum = [math]::Min(100,[math]::Ceiling((($ys | Measure-Object -Maximum).Maximum) + 2))
+    $chart.ChartAreas.Add($area)
+
+    $series = New-Object System.Windows.Forms.DataVisualization.Charting.Series "Secure Score"
+    $series.ChartType   = [System.Windows.Forms.DataVisualization.Charting.SeriesChartType]::Line
+    $series.BorderWidth = 3
+    $series.MarkerStyle = [System.Windows.Forms.DataVisualization.Charting.MarkerStyle]::Circle
+    $series.MarkerSize  = 6
+    foreach ($row in $trend) { [void]$series.Points.AddXY($row.Date, $row.Percentage) }
+    $chart.Series.Add($series)
+
+    $title = New-Object System.Windows.Forms.DataVisualization.Charting.Title
+    $title.Text = ("Secure Score: {0}/{1} ({2}%)" -f [math]::Round($Current,0), $MaxScore, $Percentage)
+    $chart.Titles.Add($title)
+
+    $chart.SaveImage($chartPath, "Png")
+
+    return @{
+        OrgName     = $OrgName
+        Percentage  = $Percentage
+        Current     = $Current
+        MaxScore    = $MaxScore
+        CreatedDate = $CreatedDate
+        ChartPath   = $chartPath
+        FolderPath  = $folderPath
+    }
+}
+
+function Invoke-SecureScoreExport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OutputPath
+    )
+
+    Write-Host "[INFO] Generating Secure Score chart..."
+
+    $result = Get-SecureScoreAndChart -OutputPath $OutputPath
+
+    $summaryPath = Join-Path $result.FolderPath "SecureScore_Summary.csv"
+    [pscustomobject]@{
+        OrgName     = $result.OrgName
+        Current     = [math]::Round($result.Current, 0)
+        MaxScore    = $result.MaxScore
+        Percentage  = $result.Percentage
+        CreatedDate = $result.CreatedDate
+        ChartPath   = $result.ChartPath
+    } | Export-Csv -Path $summaryPath -NoTypeInformation -Encoding UTF8
+
+    Write-Host "[INFO] Secure Score exported: $($result.ChartPath)"
+    Write-Host "[INFO] Secure Score summary:  $summaryPath"
+}
+#endregion Secure Score
 
 #region Self-delete (best-effort)
 function Invoke-SelfDelete {
@@ -317,6 +425,10 @@ try {
         Invoke-LicenseReview -OutputPath $OutputPath -LicenseMapUrl $LicenseMapUrl
     }
 
+    if ($SecureScore) {
+        Invoke-SecureScoreExport -OutputPath $OutputPath
+    }
+
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
 }
 catch {
@@ -327,15 +439,15 @@ finally {
     Write-Host "[INFO] Disconnecting sessions..."
 
     Write-Host "[INFO] Disconnecting AzAccount and clearing context..."
-    Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue | Out-Null
-    Clear-AzContext -Scope Process -ErrorAction SilentlyContinue | Out-Null
+    $null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
+    $null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
 
     Write-Host "[INFO] Disconnecting Microsoft Graph..."
-    Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+    $null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
     Invoke-SelfDelete -ScriptPath $scriptPath
-    
-    Write-Host "[INFO] Cleanup complete." 
+
+    Write-Host "[INFO] Cleanup complete."
 
     Write-Host ""
     Write-Host "Press any key to exit..."
