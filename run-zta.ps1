@@ -169,7 +169,7 @@ function Set-ManagementPartnerAssociationSilent {
 }
 #endregion Partner association
 
-#region License Review (optional, no explicit Graph module imports)
+#region License Review (optional, ensures map CSV saved under License Review)
 function Invoke-LicenseReview {
     [CmdletBinding()]
     param(
@@ -180,6 +180,7 @@ function Invoke-LicenseReview {
         [string]$LicenseMapUrl
     )
 
+    # Ensure Beta.Users is available (ZTA usually brings the rest). Do NOT Import-Module Graph modules.
     if (-not (Get-Module -ListAvailable -Name "Microsoft.Graph.Beta.Users")) {
         Write-Host "[INFO] Installing module: Microsoft.Graph.Beta.Users"
         Install-Module -Name "Microsoft.Graph.Beta.Users" -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
@@ -218,8 +219,13 @@ function Invoke-LicenseReview {
         Write-Host "[INFO] Connected to Microsoft Graph."
     }
 
+    # Folder for licensing outputs
+    $licenseFolder = Join-Path $OutputPath "License Review"
+    New-Item -Path $licenseFolder -ItemType Directory -Force | Out-Null
+
+    # Save mapping CSV in the same folder as License_Review.csv (per your request)
     $mapFileName = "Product names and service plan identifiers for licensing.csv"
-    $mapPath = Join-Path $OutputPath $mapFileName
+    $mapPath = Join-Path $licenseFolder $mapFileName
 
     if (-not (Test-Path -LiteralPath $mapPath)) {
         Write-Host "[INFO] Downloading license map CSV..."
@@ -254,9 +260,6 @@ function Invoke-LicenseReview {
         }
     }
 
-    $licenseFolder = Join-Path $OutputPath "License Review"
-    New-Item -Path $licenseFolder -ItemType Directory -Force | Out-Null
-
     $csvOut = Join-Path $licenseFolder "License_Review.csv"
     $licenseOverview | Export-Csv -Path $csvOut -NoTypeInformation -Encoding UTF8
 
@@ -264,10 +267,40 @@ function Invoke-LicenseReview {
 }
 #endregion License Review
 
-#region Secure Score (optional)
+#region Secure Score (optional) - ensures permissions/scopes needed
+function Ensure-SecureScoreGraphAccess {
+    [CmdletBinding()]
+    param()
+
+    # Secure Score needs Graph Security + Org read (delegated)
+    $secureScoreScopes = @("SecurityEvents.Read.All", "Organization.Read.All")
+
+    # Ensure module that provides Get-MgSecuritySecureScore exists
+    if (-not (Get-Module -ListAvailable -Name "Microsoft.Graph.Security")) {
+        Write-Host "[INFO] Installing module: Microsoft.Graph.Security"
+        Install-Module -Name "Microsoft.Graph.Security" -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+    }
+
+    $ctx = Get-MgContext
+    $needsConnect = $true
+
+    if ($ctx -and $ctx.Scopes) {
+        $missing = @($secureScoreScopes | Where-Object { $ctx.Scopes -notcontains $_ })
+        if ($missing.Count -eq 0) { $needsConnect = $false }
+        else {
+            Write-Host "[INFO] Secure Score missing Graph scopes: $($missing -join ', ')"
+        }
+    }
+
+    if ($needsConnect) {
+        Write-Host "[INFO] Connecting to Microsoft Graph for Secure Score..."
+        Connect-MgGraph -Scopes $secureScoreScopes -NoWelcome -ErrorAction Stop | Out-Null
+    }
+}
+
 function Get-SecureScoreAndChart {
     param(
-        [Parameter(Mandatory=$true)]
+        [Parameter(Mandatory = $true)]
         [string]$OutputPath,
         [int]$ChartWidth  = 1200,
         [int]$ChartHeight = 600
@@ -356,8 +389,9 @@ function Invoke-SecureScoreExport {
         [string]$OutputPath
     )
 
-    Write-Host "[INFO] Generating Secure Score chart..."
+    Ensure-SecureScoreGraphAccess
 
+    Write-Host "[INFO] Generating Secure Score chart..."
     $result = Get-SecureScoreAndChart -OutputPath $OutputPath
 
     $summaryPath = Join-Path $result.FolderPath "SecureScore_Summary.csv"
@@ -448,9 +482,4 @@ finally {
     Invoke-SelfDelete -ScriptPath $scriptPath
 
     Write-Host "[INFO] Cleanup complete."
-
-    Write-Host ""
-    Write-Host "Press any key to exit..."
-    [void][System.Console]::ReadKey($true)
-    exit
 }
