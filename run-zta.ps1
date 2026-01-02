@@ -614,10 +614,16 @@ function Get-ExecutiveSummaryTemplateFromTempOrDownload {
 
     $rawUrl = Convert-GitHubUrlToRaw -Url $TemplateUrl
 
+    $oldPP = $ProgressPreference
+    
     try {
-        $oldPP = $ProgressPreference
         $ProgressPreference = 'SilentlyContinue'
+    
         Invoke-WebRequest -Uri $rawUrl -OutFile $tempPath -ErrorAction Stop
+    
+        # Track that the script downloaded this template so we can delete it later
+        $script:DownloadedExecutiveSummaryTemplatePath = $tempPath
+    
         return $tempPath
     }
     catch {
@@ -908,8 +914,8 @@ function New-ZtaExecutiveSummaryDoc {
         $doc = $word.Documents.Open($outDoc, $false, $false)
 
         $ccHits = 0
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "CustomerName"         -Text (if ($CustomerName) { $CustomerName } else { "" }))
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "PreparedBy"           -Text (if ($PreparedBy) { $PreparedBy } else { "Nubrix Security" }))
+        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "CustomerName"         -Text $CustomerName)
+        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "PreparedBy"           -Text $PreparedBy)
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "RunDate"              -Text $runDate)
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "TenantId"             -Text $TenantId)
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "ExecutiveSummary"     -Text $ExecutiveSummaryText)
@@ -919,12 +925,12 @@ function New-ZtaExecutiveSummaryDoc {
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "ManualCount"          -Text "$manual")
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "StatusBreakdown"      -Text $statusBreakdownText)
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "TopPillars"           -Text $topPillarsText)
-
-        # New CCs from your updated template
+        
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Roadmap_0_30"         -Text $roadmap0_30)
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Roadmap_30_90"        -Text $roadmap30_90)
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Roadmap_90_180"       -Text $roadmap90_180)
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Workshop_CTA"         -Text $workshopCta)
+
 
         $null = Populate-TopRisksTable_ByBookmark -Doc $doc -TopRisks $topRisks -BookmarkName "TopRisksTableSpot"
 
@@ -1056,6 +1062,13 @@ finally {
     #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
     Invoke-SelfDelete -ScriptPath $scriptPath
+
+    try {
+        if ($script:DownloadedExecutiveSummaryTemplatePath -and (Test-Path -LiteralPath $script:DownloadedExecutiveSummaryTemplatePath)) {
+            Remove-Item -LiteralPath $script:DownloadedExecutiveSummaryTemplatePath -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+    } catch {}
+
 
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
