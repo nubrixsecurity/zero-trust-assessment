@@ -575,7 +575,7 @@ function Export-ZtaActionableCsv {
 }
 #endregion ZTA export
 
-#region Executive Summary (Content Controls + SaveAs; template: ZeroTrustAssessment_ExecutiveSummary_Template.docx)
+#region Executive Summary (Content Controls + SaveAs2; template: ZeroTrustAssessment_ExecutiveSummary_Template.docx)
 
 # Template download source (GitHub URL; blob URL is OK - script will convert to raw)
 $ExecutiveSummaryTemplateUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/ZeroTrustAssessment_ExecutiveSummary_Template.docx"
@@ -584,9 +584,6 @@ function Convert-GitHubUrlToRaw {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Url)
 
-    # Convert:
-    # https://github.com/<org>/<repo>/blob/<branch>/<path>
-    # -> https://raw.githubusercontent.com/<org>/<repo>/<branch>/<path>
     if ($Url -match '^https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.*)$') {
         $org    = $Matches[1]
         $repo   = $Matches[2]
@@ -594,36 +591,29 @@ function Convert-GitHubUrlToRaw {
         $path   = $Matches[4]
         return "https://raw.githubusercontent.com/$org/$repo/$branch/$path"
     }
-
     return $Url
 }
 
 function Get-ExecutiveSummaryTemplateFromTempOrDownload {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$TemplateUrl
-    )
+    param([Parameter(Mandatory)][string]$TemplateUrl)
 
     $fileName = "ZeroTrustAssessment_ExecutiveSummary_Template.docx"
     $tempPath = Join-Path $env:TEMP $fileName
 
-    # If already downloaded in temp, use it
-    if (Test-Path -LiteralPath $tempPath) {
-        return $tempPath
-    }
+    if (Test-Path -LiteralPath $tempPath) { return $tempPath }
 
     $rawUrl = Convert-GitHubUrlToRaw -Url $TemplateUrl
 
     $oldPP = $ProgressPreference
-    
     try {
         $ProgressPreference = 'SilentlyContinue'
-    
         Invoke-WebRequest -Uri $rawUrl -OutFile $tempPath -ErrorAction Stop
-    
-        # Track that the script downloaded this template so we can delete it later
+
+        # Prevent Protected View / MOTW prompts from blocking Word COM automation
+        try { Unblock-File -LiteralPath $tempPath -ErrorAction SilentlyContinue } catch {}
+
         $script:DownloadedExecutiveSummaryTemplatePath = $tempPath
-    
         return $tempPath
     }
     catch {
@@ -653,7 +643,6 @@ function Resolve-ExecutiveSummaryTemplatePath {
     $p3 = Join-Path (Join-Path $env:USERPROFILE "Downloads") $fileName
     if (Test-Path -LiteralPath $p3) { return $p3 }
 
-    # NEW: Download to %TEMP% from GitHub (raw) as a fallback
     if (-not [string]::IsNullOrWhiteSpace($script:ExecutiveSummaryTemplateUrl)) {
         $tempTemplate = Get-ExecutiveSummaryTemplateFromTempOrDownload -TemplateUrl $script:ExecutiveSummaryTemplateUrl
         if ($tempTemplate -and (Test-Path -LiteralPath $tempTemplate)) { return $tempTemplate }
@@ -672,13 +661,33 @@ function Test-WordComAvailable {
     catch { return $false }
 }
 
+# Return ALL content controls, including headers/footers/textboxes (StoryRanges)
+function Get-AllContentControls {
+    param([Parameter(Mandatory)]$Doc)
+
+    $all = @()
+    try { $all += @($Doc.ContentControls) } catch {}
+
+    try {
+        $sr = $Doc.StoryRanges
+        while ($sr) {
+            try {
+                if ($sr.ContentControls) { $all += @($sr.ContentControls) }
+            } catch {}
+            try { $sr = $sr.NextStoryRange } catch { break }
+        }
+    } catch {}
+
+    return $all
+}
+
 function Get-ContentControlByKey {
     param(
         [Parameter(Mandatory)]$Doc,
         [Parameter(Mandatory)][string]$Key
     )
 
-    foreach ($cc in @($Doc.ContentControls)) {
+    foreach ($cc in @(Get-AllContentControls -Doc $Doc)) {
         try {
             if ($cc.Tag -eq $Key -or $cc.Title -eq $Key) { return $cc }
         } catch {}
@@ -686,14 +695,13 @@ function Get-ContentControlByKey {
     return $null
 }
 
-# Match Rich Text content controls by their placeholder text (Range.Text), when Tag/Title are empty
 function Get-ContentControlByPlaceholderText {
     param(
         [Parameter(Mandatory)]$Doc,
         [Parameter(Mandatory)][string]$Key
     )
 
-    foreach ($cc in @($Doc.ContentControls)) {
+    foreach ($cc in @(Get-AllContentControls -Doc $Doc)) {
         try {
             $text = $null
             try { $text = $cc.Range.Text } catch { $text = $null }
@@ -714,62 +722,45 @@ function Set-RichCCValue {
         [Parameter(Mandatory)][string]$Text
     )
 
-    # Keep original behavior for templates that use Tag/Title
     $cc = Get-ContentControlByKey -Doc $Doc -Key $Key
-
-    # Fallback for your current template: Tag/Title empty, placeholder text is the identifier
-    if (-not $cc) {
-        $cc = Get-ContentControlByPlaceholderText -Doc $Doc -Key $Key
-    }
-
+    if (-not $cc) { $cc = Get-ContentControlByPlaceholderText -Doc $Doc -Key $Key }
     if (-not $cc) { return $false }
 
     try {
-        # Match your working approach (more reliable for Rich Text CCs)
         $cc.LockContents = $false
         $cc.Range.Delete()
-        $cc.Range.InsertAfter($Text)
+        $cc.Range.InsertAfter([string]$Text)
         return $true
-    } catch { return $false }
+    } catch {
+        return $false
+    }
 }
 
-function Populate-TopRisksTable_ByBookmark {
+function Set-ImageInRichCC {
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$Doc,
-        [Parameter(Mandatory)]$TopRisks,
-        [Parameter(Mandatory)][string]$BookmarkName
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)][string]$ImagePath
     )
 
-    if (-not $Doc.Bookmarks.Exists($BookmarkName)) { return $false }
-
-    $range = $Doc.Bookmarks.Item($BookmarkName).Range
-    $rows = 11
-    $cols = 6
-    $tbl = $Doc.Tables.Add($range, $rows, $cols)
-    $tbl.Style = "Table Grid"
-
-    $tbl.Cell(1,1).Range.Text = "TestId"
-    $tbl.Cell(1,2).Range.Text = "Title"
-    $tbl.Cell(1,3).Range.Text = "Pillar"
-    $tbl.Cell(1,4).Range.Text = "Status"
-    $tbl.Cell(1,5).Range.Text = "Risk/Impact"
-    $tbl.Cell(1,6).Range.Text = "Remediation Links"
-
-    for ($i = 0; $i -lt 10; $i++) {
-        $r = $i + 2
-        $item = $null
-        if ($i -lt $TopRisks.Count) { $item = $TopRisks[$i] }
-
-        $tbl.Cell($r,1).Range.Text = if ($item) { [string]$item.TestId } else { "" }
-        $tbl.Cell($r,2).Range.Text = if ($item) { [string]$item.TestTitle } else { "" }
-        $tbl.Cell($r,3).Range.Text = if ($item) { [string]$item.TestPillar } else { "" }
-        $tbl.Cell($r,4).Range.Text = if ($item) { [string]$item.TestStatus } else { "" }
-        $tbl.Cell($r,5).Range.Text = if ($item) { ("{0} / {1}" -f $item.TestRisk, $item.TestImpact) } else { "" }
-        $tbl.Cell($r,6).Range.Text = if ($item) { [string]$item.RemediationLinks } else { "" }
+    if ([string]::IsNullOrWhiteSpace($ImagePath) -or -not (Test-Path -LiteralPath $ImagePath)) {
+        return $false
     }
 
-    $Doc.Bookmarks.Add($BookmarkName, $tbl.Range) | Out-Null
-    return $true
+    $cc = Get-ContentControlByKey -Doc $Doc -Key $Key
+    if (-not $cc) { $cc = Get-ContentControlByPlaceholderText -Doc $Doc -Key $Key }
+    if (-not $cc) { return $false }
+
+    try {
+        $cc.LockContents = $false
+        try { $cc.Range.Delete() } catch {}
+
+        $rng = $cc.Range
+        $null = $rng.InlineShapes.AddPicture($ImagePath)
+        return $true
+    }
+    catch { return $false }
 }
 
 function Get-RiskRank {
@@ -783,62 +774,74 @@ function Get-RiskRank {
     }
 }
 
-function Get-RoadmapText {
+# Top Risks table via Rich Text Content Control (NO bookmarks)
+function Add-TopRisksTable_IntoContentControl {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][object[]]$Rows,
-        [Parameter(Mandatory)][ValidateSet('0_30','30_90','90_180')][string]$Window
+        [Parameter(Mandatory)]$Doc,
+        [Parameter(Mandatory)][object[]]$TopRisks,
+        [Parameter(Mandatory)][string]$Key
     )
 
-    $fail = @($Rows | Where-Object { $_.TestStatus -match 'fail|at risk|noncompliant|not met' })
+    $cc = Get-ContentControlByKey -Doc $Doc -Key $Key
+    if (-not $cc) { $cc = Get-ContentControlByPlaceholderText -Doc $Doc -Key $Key }
+    if (-not $cc) { return $false }
 
-    $topPillars = @($fail | Group-Object TestPillar | Sort-Object Count -Descending | Select-Object -First 3 |
-        ForEach-Object { $_.Name } |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    try {
+        $cc.LockContents = $false
 
-    $pText = if ($topPillars.Count -gt 0) { ($topPillars -join ", ") } else { "Identity, Devices, Applications" }
+        # clear placeholder
+        $cc.Range.Text = ""
+        $range = $cc.Range
+        $range.Collapse(0) # start
 
-    switch ($Window) {
-        '0_30' {
-            return @(
-                "Focus on quick wins that reduce immediate risk and harden identity and admin controls.",
-                "Prioritize failed/at-risk findings in pillars: $pText.",
-                "Typical actions: enforce MFA for all users/admins, reduce standing admin roles, validate Conditional Access baselines, close obvious policy gaps, and address critical/high risk items in the Actionable CSV."
-            ) -join "`r`n"
+        $rows = 11
+        $cols = 6
+        $tbl = $Doc.Tables.Add($range, $rows, $cols)
+        $tbl.Style = "Table Grid"
+
+        $tbl.Cell(1,1).Range.Text = "TestId"
+        $tbl.Cell(1,2).Range.Text = "Title"
+        $tbl.Cell(1,3).Range.Text = "Pillar"
+        $tbl.Cell(1,4).Range.Text = "Status"
+        $tbl.Cell(1,5).Range.Text = "Risk/Impact"
+        $tbl.Cell(1,6).Range.Text = "Remediation Links"
+
+        for ($i = 0; $i -lt 10; $i++) {
+            $r = $i + 2
+            $item = $null
+            if ($i -lt $TopRisks.Count) { $item = $TopRisks[$i] }
+
+            $tbl.Cell($r,1).Range.Text = if ($item) { [string]$item.TestId } else { "" }
+            $tbl.Cell($r,2).Range.Text = if ($item) { [string]$item.TestTitle } else { "" }
+            $tbl.Cell($r,3).Range.Text = if ($item) { [string]$item.TestPillar } else { "" }
+            $tbl.Cell($r,4).Range.Text = if ($item) { [string]$item.TestStatus } else { "" }
+            $tbl.Cell($r,5).Range.Text = if ($item) { ("{0} / {1}" -f $item.TestRisk, $item.TestImpact) } else { "" }
+            $tbl.Cell($r,6).Range.Text = if ($item) { [string]$item.RemediationLinks } else { "" }
         }
-        '30_90' {
-            return @(
-                "Focus on hardening and standardization across users, devices, and access policies.",
-                "Typical actions: expand Conditional Access coverage, require compliant devices where appropriate, tighten legacy authentication controls, standardize device configuration/compliance baselines, and improve alerting/visibility for key workloads."
-            ) -join "`r`n"
-        }
-        '90_180' {
-            return @(
-                "Focus on governance and operationalization to sustain Zero Trust improvements.",
-                "Typical actions: implement lifecycle/access reviews, automate enforcement where possible, mature monitoring and response playbooks, align policies to business units and data sensitivity, and establish monthly posture review cadence using the Actionable CSV as the source of truth."
-            ) -join "`r`n"
-        }
+
+        return $true
     }
-}
-
-function Get-WorkshopCtaText {
-    return @(
-        "Zero Trust Roadmap Workshop (optional):",
-        "We’ll review the findings, validate priorities with stakeholders, and produce a phased execution plan.",
-        "Deliverables typically include: a 90-day remediation backlog with owners, effort estimates, dependencies, and a clear roadmap aligned to business risk."
-    ) -join "`r`n"
+    catch { return $false }
 }
 
 function New-ZtaExecutiveSummaryDoc {
     [CmdletBinding()]
     param(
+        # NOTE: caller should pass the existing $assessmentFolder here
         [Parameter(Mandatory)][string]$AssessmentFolder,
+
         [Parameter(Mandatory)][string]$TenantId,
         [Parameter(Mandatory)][string]$ActionableCsvPath,
         [Parameter(Mandatory)][string]$TemplatePath,
+
         [Parameter(Mandatory = $false)][string]$CustomerName,
         [Parameter(Mandatory = $false)][string]$PreparedBy = "Nubrix Security",
-        [Parameter(Mandatory = $false)][string]$ExecutiveSummaryText
+        [Parameter(Mandatory = $false)][string]$ExecutiveSummaryText,
+
+        # OPTIONAL: secure score content controls
+        [Parameter(Mandatory = $false)][string]$SecureScoreSummaryText,
+        [Parameter(Mandatory = $false)][string]$SecureScorePngPath
     )
 
     if (-not (Test-Path -LiteralPath $TemplatePath)) {
@@ -857,22 +860,28 @@ function New-ZtaExecutiveSummaryDoc {
     }
 
     $runDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    $total = $rows.Count
+    $total   = [int]$rows.Count
 
-    $fails  = @($rows | Where-Object { $_.TestStatus -match 'fail|at risk|noncompliant|not met' }).Count
-    $passes = @($rows | Where-Object { $_.TestStatus -match 'pass|implemented|compliant' }).Count
-    $manual = $total - $fails - $passes
+    $fails  = [int](($rows | Where-Object { $_.TestStatus -match 'fail|at risk|noncompliant|not met' } | Measure-Object).Count)
+    $passes = [int](($rows | Where-Object { $_.TestStatus -match 'pass|implemented|compliant' } | Measure-Object).Count)
+    $manual = [int]($total - $fails - $passes)
 
-    $statusBreakdownText = (($rows | Group-Object TestStatus | Sort-Object Count -Descending |
-        ForEach-Object { "- {0}: {1}" -f (if ([string]::IsNullOrWhiteSpace($_.Name)) { "Unknown" } else { $_.Name }), $_.Count }) -join "`r`n")
+    $statusGroups = $rows | Group-Object TestStatus | Sort-Object Count -Descending
+    $statusBreakdownText = ($statusGroups | ForEach-Object {
+        $name = if ([string]::IsNullOrWhiteSpace($_.Name)) { "Unknown" } else { $_.Name }
+        "- ${name}: $($_.Count)"
+    }) -join "`r`n"
 
-    $topPillarsText = (($rows | Where-Object { $_.TestStatus -match 'fail|at risk|noncompliant|not met' } |
-        Group-Object TestPillar | Sort-Object Count -Descending | Select-Object -First 5 |
-        ForEach-Object { "- {0}: {1}" -f (if ([string]::IsNullOrWhiteSpace($_.Name)) { "Unknown" } else { $_.Name }), $_.Count }) -join "`r`n")
+    $failRows = $rows | Where-Object { $_.TestStatus -match 'fail|at risk|noncompliant|not met' }
+    $pillarGroups = $failRows | Group-Object TestPillar | Sort-Object Count -Descending | Select-Object -First 5
+    $topPillarsText = ($pillarGroups | ForEach-Object {
+        $name = if ([string]::IsNullOrWhiteSpace($_.Name)) { "Unknown" } else { $_.Name }
+        "- ${name}: $($_.Count)"
+    }) -join "`r`n"
 
     $topRisks = $rows |
         ForEach-Object {
-            $_ | Add-Member -NotePropertyName _RiskScore -NotePropertyValue (Get-RiskRank $_.TestRisk) -Force
+            $_ | Add-Member -NotePropertyName _RiskScore   -NotePropertyValue (Get-RiskRank $_.TestRisk)   -Force
             $_ | Add-Member -NotePropertyName _ImpactScore -NotePropertyValue (Get-RiskRank $_.TestImpact) -Force
             $_
         } |
@@ -891,10 +900,11 @@ function New-ZtaExecutiveSummaryDoc {
     $roadmap90_180 = Get-RoadmapText -Rows $rows -Window '90_180'
     $workshopCta   = Get-WorkshopCtaText
 
-    $outDoc = Join-Path $AssessmentFolder "ZeroTrustAssessment_ExecutiveSummary.docx"
+    # IMPORTANT: Summary must land in the Assessment Report folder
     if (-not (Test-Path -LiteralPath $AssessmentFolder)) {
         New-Item -Path $AssessmentFolder -ItemType Directory -Force | Out-Null
     }
+    $outDoc = Join-Path $AssessmentFolder "ZeroTrustAssessment_ExecutiveSummary.docx"
 
     if (-not (Test-WordComAvailable)) {
         Write-Host "[WARN] Microsoft Word COM automation not available. Executive Summary not generated."
@@ -906,33 +916,41 @@ function New-ZtaExecutiveSummaryDoc {
     try {
         $word = New-Object -ComObject Word.Application
         $word.Visible = $false
+        $word.DisplayAlerts = 0
 
-        # Open template, SaveAs to output, then open output for edits
+        # Open template, SaveAs2 to output, then open output for edits
         $doc = $word.Documents.Open($TemplatePath, $false, $true)
-        $doc.SaveAs([ref]$outDoc) | Out-Null
+        $doc.SaveAs2($outDoc) | Out-Null
         $doc.Close($false) | Out-Null
         $doc = $word.Documents.Open($outDoc, $false, $false)
 
-        $ccHits = 0
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "CustomerName"         -Text $CustomerName)
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "PreparedBy"           -Text $PreparedBy)
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "RunDate"              -Text $runDate)
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "TenantId"             -Text $TenantId)
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "ExecutiveSummary"     -Text $ExecutiveSummaryText)
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "TotalRecommendations" -Text "$total")
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "FailedCount"          -Text "$fails")
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "PassedCount"          -Text "$passes")
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "ManualCount"          -Text "$manual")
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "StatusBreakdown"      -Text $statusBreakdownText)
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "TopPillars"           -Text $topPillarsText)
-        
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Roadmap_0_30"         -Text $roadmap0_30)
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Roadmap_30_90"        -Text $roadmap30_90)
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Roadmap_90_180"       -Text $roadmap90_180)
-        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Workshop_CTA"         -Text $workshopCta)
+        # Populate rich CCs
+        $null = Set-RichCCValue -Doc $doc -Key "CustomerName"         -Text $CustomerName
+        $null = Set-RichCCValue -Doc $doc -Key "PreparedBy"           -Text $PreparedBy
+        $null = Set-RichCCValue -Doc $doc -Key "RunDate"              -Text $runDate
+        $null = Set-RichCCValue -Doc $doc -Key "TenantId"             -Text $TenantId
+        $null = Set-RichCCValue -Doc $doc -Key "ExecutiveSummary"     -Text $ExecutiveSummaryText
+        $null = Set-RichCCValue -Doc $doc -Key "TotalRecommendations" -Text "$total"
+        $null = Set-RichCCValue -Doc $doc -Key "FailedCount"          -Text "$fails"
+        $null = Set-RichCCValue -Doc $doc -Key "PassedCount"          -Text "$passes"
+        $null = Set-RichCCValue -Doc $doc -Key "ManualCount"          -Text "$manual"
+        $null = Set-RichCCValue -Doc $doc -Key "StatusBreakdown"      -Text $statusBreakdownText
+        $null = Set-RichCCValue -Doc $doc -Key "TopPillars"           -Text $topPillarsText
+        $null = Set-RichCCValue -Doc $doc -Key "Roadmap_0_30"         -Text $roadmap0_30
+        $null = Set-RichCCValue -Doc $doc -Key "Roadmap_30_90"        -Text $roadmap30_90
+        $null = Set-RichCCValue -Doc $doc -Key "Roadmap_90_180"       -Text $roadmap90_180
+        $null = Set-RichCCValue -Doc $doc -Key "Workshop_CTA"         -Text $workshopCta
 
+        # Top Risks table via Rich Text CC (NO bookmarks)
+        $null = Add-TopRisksTable_IntoContentControl -Doc $doc -TopRisks $topRisks -Key "TopRisksTableSpot"
 
-        $null = Populate-TopRisksTable_ByBookmark -Doc $doc -TopRisks $topRisks -BookmarkName "TopRisksTableSpot"
+        # OPTIONAL: Secure Score text + image via CC (uses your existing $chartPath when caller passes it)
+        if (-not [string]::IsNullOrWhiteSpace($SecureScoreSummaryText)) {
+            $null = Set-RichCCValue -Doc $doc -Key "SecureScore_Summary" -Text $SecureScoreSummaryText
+        }
+        if (-not [string]::IsNullOrWhiteSpace($SecureScorePngPath)) {
+            $null = Set-ImageInRichCC -Doc $doc -Key "SecureScore_Image" -ImagePath $SecureScorePngPath
+        }
 
         $doc.Save() | Out-Null
         return $outDoc
@@ -994,19 +1012,32 @@ try {
         Write-Host "[WARN] Failed to generate Actionable CSV: $($_.Exception.Message)"
     }
 
-    # ALWAYS: Executive Summary if Actionable CSV exists and template is found
+   # ALWAYS: Executive Summary if Actionable CSV exists and template is found
     try {
         if ($export -and $export.AssessmentFolder -and $export.ActionableCsv -and (Test-Path -LiteralPath $export.ActionableCsv)) {
-
+    
             $resolvedTemplate = Resolve-ExecutiveSummaryTemplatePath -ProvidedPath $ExecutiveSummaryTemplatePath
-
+    
             if (-not $resolvedTemplate) {
                 Write-Host "[WARN] Executive Summary template not found (expected name: ZeroTrustAssessment_ExecutiveSummary_Template.docx)."
                 Write-Host "[WARN] Place it next to the script OR run from the repo root OR pass -ExecutiveSummaryTemplatePath."
             }
             else {
                 Write-Host "[INFO] Executive Summary template resolved to: $resolvedTemplate"
-
+    
+                # Secure Score inputs (optional)
+                $secureScoreSummaryText = @(
+                    "Secure Score Summary:",
+                    "The Secure Score trend chart is included below.",
+                    "Recommended next steps: address high-impact gaps first (especially identity and admin protections), and establish a monthly posture review cadence."
+                ) -join "`r`n"
+    
+                # chartPath is created earlier in your Secure Score region (OutputPath\Secure Score\SecureScore_Trend_<pct>pct.png)
+                $secureScorePngPath = $null
+                if ($chartPath -and (Test-Path -LiteralPath $chartPath)) {
+                    $secureScorePngPath = $chartPath
+                }
+    
                 $docPath = New-ZtaExecutiveSummaryDoc `
                     -AssessmentFolder $export.AssessmentFolder `
                     -TenantId $TenantId `
@@ -1014,10 +1045,18 @@ try {
                     -TemplatePath $resolvedTemplate `
                     -CustomerName $CustomerName `
                     -PreparedBy $PreparedBy `
-                    -ExecutiveSummaryText $ExecutiveSummaryText
-
+                    -ExecutiveSummaryText $ExecutiveSummaryText `
+                    -SecureScoreSummaryText $secureScoreSummaryText `
+                    -SecureScorePngPath $secureScorePngPath
+    
                 if ($docPath -and (Test-Path -LiteralPath $docPath)) {
                     Write-Host "[INFO] Executive Summary saved to: $docPath"
+    
+                    if ($secureScorePngPath) {
+                        Write-Host "[INFO] Secure Score image inserted from: $secureScorePngPath"
+                    } else {
+                        Write-Host "[WARN] Secure Score image not inserted (chart file not found)."
+                    }
                 }
                 else {
                     Write-Host "[WARN] Executive Summary was not created."
@@ -1031,6 +1070,7 @@ try {
     catch {
         Write-Host "[WARN] Executive Summary generation failed: $($_.Exception.Message)"
     }
+
 
     if ($Partner) {
         Set-ManagementPartnerAssociationSilent -TenantId $TenantId -PartnerIdDesired $PartnerIdDesired
