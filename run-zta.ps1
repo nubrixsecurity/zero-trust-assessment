@@ -5,7 +5,6 @@
     -LicenseReview
     -SecureScore
     -KeepZtExport   (optional; keeps the zt-export folder instead of deleting it)
-    -OpenOutput     (optional; opens OutputPath at end)
 
     ALWAYS (no flag):
     - Create Assessment Report folder
@@ -13,9 +12,19 @@
     - Export Actionable CSV into Assessment Report (with RemediationLinks column)
     - Move HTML report into Assessment Report
     - Generate Executive Summary DOCX in Assessment Report (if template exists)
-      Template filename expected:
+      Template filename expected (new):
         ZeroTrustAssessment_ExecutiveSummary_Template.docx
-      Uses Content Controls (Tag/Title keys) + bookmark: TopRisksTableSpot
+
+    Template fields supported:
+    Content Controls (Tag/Title):
+      CustomerName, PreparedBy, RunDate, TenantId,
+      ExecutiveSummary, TotalRecommendations, FailedCount, PassedCount, ManualCount,
+      StatusBreakdown, TopPillars,
+      Roadmap_0_30, Roadmap_30_90, Roadmap_90_180,
+      Workshop_CTA
+
+    Bookmark supported:
+      TopRisksTableSpot   (script inserts the Top Risks table here)
 
     Notes:
     - Secure Score + License Review remain optional flags.
@@ -559,12 +568,13 @@ function Export-ZtaActionableCsv {
     return @{
         AssessmentFolder = $assessmentFolder
         ActionableCsv    = $outCsv
+        Rows             = $rows
         RowCount         = ($rows | Measure-Object).Count
     }
 }
 #endregion ZTA export
 
-#region Executive Summary (Content Controls + SaveAs; template ends with .docx)
+#region Executive Summary (Content Controls + SaveAs; template: ZeroTrustAssessment_ExecutiveSummary_Template.docx)
 function Resolve-ExecutiveSummaryTemplatePath {
     [CmdletBinding()]
     param([Parameter(Mandatory = $false)][string]$ProvidedPath)
@@ -628,22 +638,6 @@ function Set-RichCCValue {
     } catch { return $false }
 }
 
-function Replace-DocPlaceholders {
-    param(
-        [Parameter(Mandatory)]$Doc,
-        [Parameter(Mandatory)][hashtable]$Map
-    )
-
-    foreach ($k in $Map.Keys) {
-        $range = $Doc.Content
-        $find = $range.Find
-        $find.ClearFormatting() | Out-Null
-        $find.Replacement.ClearFormatting() | Out-Null
-        # wdReplaceAll = 2
-        $null = $find.Execute($k, $false, $true, $false, $false, $false, $true, 1, $false, [string]$Map[$k], 2)
-    }
-}
-
 function Populate-TopRisksTable_ByBookmark {
     param(
         [Parameter(Mandatory)]$Doc,
@@ -692,6 +686,52 @@ function Get-RiskRank {
         'low'      { return 1 }
         default    { return 0 }
     }
+}
+
+function Get-RoadmapText {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$Rows,
+        [Parameter(Mandatory)][ValidateSet('0_30','30_90','90_180')][string]$Window
+    )
+
+    $fail = @($Rows | Where-Object { $_.TestStatus -match 'fail|at risk|noncompliant|not met' })
+
+    $topPillars = @($fail | Group-Object TestPillar | Sort-Object Count -Descending | Select-Object -First 3 |
+        ForEach-Object { $_.Name } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+    $pText = if ($topPillars.Count -gt 0) { ($topPillars -join ", ") } else { "Identity, Devices, Applications" }
+
+    switch ($Window) {
+        '0_30' {
+            return @(
+                "Focus on quick wins that reduce immediate risk and harden identity and admin controls.",
+                "Prioritize failed/at-risk findings in pillars: $pText.",
+                "Typical actions: enforce MFA for all users/admins, reduce standing admin roles, validate Conditional Access baselines, close obvious policy gaps, and address critical/high risk items in the Actionable CSV."
+            ) -join "`r`n"
+        }
+        '30_90' {
+            return @(
+                "Focus on hardening and standardization across users, devices, and access policies.",
+                "Typical actions: expand Conditional Access coverage, require compliant devices where appropriate, tighten legacy authentication controls, standardize device configuration/compliance baselines, and improve alerting/visibility for key workloads."
+            ) -join "`r`n"
+        }
+        '90_180' {
+            return @(
+                "Focus on governance and operationalization to sustain Zero Trust improvements.",
+                "Typical actions: implement lifecycle/access reviews, automate enforcement where possible, mature monitoring and response playbooks, align policies to business units and data sensitivity, and establish monthly posture review cadence using the Actionable CSV as the source of truth."
+            ) -join "`r`n"
+        }
+    }
+}
+
+function Get-WorkshopCtaText {
+    return @(
+        "Zero Trust Roadmap Workshop (optional):",
+        "We’ll review the findings, validate priorities with stakeholders, and produce a phased execution plan.",
+        "Deliverables typically include: a 90-day remediation backlog with owners, effort estimates, dependencies, and a clear roadmap aligned to business risk."
+    ) -join "`r`n"
 }
 
 function New-ZtaExecutiveSummaryDoc {
@@ -751,6 +791,11 @@ function New-ZtaExecutiveSummaryDoc {
             "Use the Actionable CSV to assign owners and track remediation, and convert the results into a phased roadmap (0–30, 30–90, 90–180 days) aligned to business risk."
     }
 
+    $roadmap0_30   = Get-RoadmapText -Rows $rows -Window '0_30'
+    $roadmap30_90  = Get-RoadmapText -Rows $rows -Window '30_90'
+    $roadmap90_180 = Get-RoadmapText -Rows $rows -Window '90_180'
+    $workshopCta   = Get-WorkshopCtaText
+
     $outDoc = Join-Path $AssessmentFolder "ZeroTrustAssessment_ExecutiveSummary.docx"
     if (-not (Test-Path -LiteralPath $AssessmentFolder)) {
         New-Item -Path $AssessmentFolder -ItemType Directory -Force | Out-Null
@@ -767,7 +812,7 @@ function New-ZtaExecutiveSummaryDoc {
         $word = New-Object -ComObject Word.Application
         $word.Visible = $false
 
-        # Open template, SaveAs to output, then open output for edits (your proven pattern)
+        # Open template, SaveAs to output, then open output for edits
         $doc = $word.Documents.Open($TemplatePath, $false, $true)
         $doc.SaveAs([ref]$outDoc) | Out-Null
         $doc.Close($false) | Out-Null
@@ -786,25 +831,13 @@ function New-ZtaExecutiveSummaryDoc {
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "StatusBreakdown"      -Text $statusBreakdownText)
         $ccHits += [int](Set-RichCCValue -Doc $doc -Key "TopPillars"           -Text $topPillarsText)
 
-        $null = Populate-TopRisksTable_ByBookmark -Doc $doc -TopRisks $topRisks -BookmarkName "TopRisksTableSpot"
+        # New CCs from your updated template
+        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Roadmap_0_30"         -Text $roadmap0_30)
+        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Roadmap_30_90"        -Text $roadmap30_90)
+        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Roadmap_90_180"       -Text $roadmap90_180)
+        $ccHits += [int](Set-RichCCValue -Doc $doc -Key "Workshop_CTA"         -Text $workshopCta)
 
-        # Fallback placeholder replacement (in case someone uses placeholder template instead)
-        if ($ccHits -eq 0) {
-            $map = @{
-                "{{customer_name}}"               = $(if ([string]::IsNullOrWhiteSpace($CustomerName)) { "" } else { $CustomerName })
-                "{{prepared_by}}"                 = $(if ([string]::IsNullOrWhiteSpace($PreparedBy))   { "Nubrix Security" } else { $PreparedBy })
-                "{{run_date}}"                    = $runDate
-                "{{tenant_id}}"                   = $TenantId
-                "{{executive_summary_paragraph}}" = $ExecutiveSummaryText
-                "{{total_recommendations}}"       = "$total"
-                "{{failed_count}}"                = "$fails"
-                "{{passed_count}}"                = "$passes"
-                "{{manual_or_not_scored_count}}"  = "$manual"
-                "{{status_breakdown_bullets}}"    = $statusBreakdownText
-                "{{top_pillars_bullets}}"         = $topPillarsText
-            }
-            Replace-DocPlaceholders -Doc $doc -Map $map
-        }
+        $null = Populate-TopRisksTable_ByBookmark -Doc $doc -TopRisks $topRisks -BookmarkName "TopRisksTableSpot"
 
         $doc.Save() | Out-Null
         return $outDoc
@@ -927,15 +960,16 @@ catch {
     throw
 }
 finally {
-    # Commented out per request (keep like your screenshot)
+    # Commented out per request
     #$null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
     #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
     #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
     Invoke-SelfDelete -ScriptPath $scriptPath
 
-    # Open output folder at end
-    try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
+    if ($OpenOutput) {
+        try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
+    }
 
     Write-Host ""
     Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
