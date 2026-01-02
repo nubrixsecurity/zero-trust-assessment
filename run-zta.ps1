@@ -5,6 +5,7 @@
     -LicenseReview
     -SecureScore
     -KeepZtExport   (optional; keeps the zt-export folder instead of deleting it)
+    -OpenOutput     (optional; opens OutputPath at end)
 
     ALWAYS (no flag):
     - Create Assessment Report folder
@@ -523,18 +524,18 @@ function Export-ZtaActionableCsv {
     $rows = foreach ($t in $tests) {
         $rem = Get-ZtaRemediationText -Desc ([string]$t.TestDescription)
         [pscustomobject]@{
-            TestId                 = $t.TestId
-            TestTitle              = $t.TestTitle
-            TestStatus             = $t.TestStatus
-            TestPillar             = $t.TestPillar
-            TestSfiPillar          = $t.TestSfiPillar
-            TestCategory           = $t.TestCategory
-            TestRisk               = $t.TestRisk
-            TestImpact             = $t.TestImpact
-            TestMinimumLicense     = $t.TestMinimumLicense
-            TestImplementationCost = $t.TestImplementationCost
+            Id                 = $t.TestId
+            Title              = $t.TestTitle
+            Status             = $t.TestStatus
+            Pillar             = $t.TestPillar
+            SfiPillar          = $t.TestSfiPillar
+            Category           = $t.TestCategory
+            Risk               = $t.TestRisk
+            Impact             = $t.TestImpact
+            MinimumLicense     = $t.TestMinimumLicense
+            ImplementationCost = $t.TestImplementationCost
             RemediationActions     = $rem
-            TestResult             = $t.TestResult
+            Result             = $t.TestResult
             RemediationLinks       = $linkLookup["$($t.TestId)"]
         }
     }
@@ -621,6 +622,27 @@ function Get-ContentControlByKey {
     return $null
 }
 
+# NEW: match Rich Text content controls by their placeholder text (Range.Text), when Tag/Title are empty
+function Get-ContentControlByPlaceholderText {
+    param(
+        [Parameter(Mandatory)]$Doc,
+        [Parameter(Mandatory)][string]$Key
+    )
+
+    foreach ($cc in @($Doc.ContentControls)) {
+        try {
+            $rt = $null
+            try { $rt = $cc.Range.Text } catch { $rt = $null }
+
+            if (-not [string]::IsNullOrWhiteSpace($rt)) {
+                if ($rt.Trim() -eq $Key) { return $cc }
+            }
+        } catch {}
+    }
+
+    return $null
+}
+
 function Set-RichCCValue {
     param(
         [Parameter(Mandatory)]$Doc,
@@ -628,7 +650,14 @@ function Set-RichCCValue {
         [Parameter(Mandatory)][string]$Text
     )
 
+    # Keep original behavior for templates that use Tag/Title
     $cc = Get-ContentControlByKey -Doc $Doc -Key $Key
+
+    # Fallback for your current template: Tag/Title empty, placeholder text is the identifier
+    if (-not $cc) {
+        $cc = Get-ContentControlByPlaceholderText -Doc $Doc -Key $Key
+    }
+
     if (-not $cc) { return $false }
 
     try {
