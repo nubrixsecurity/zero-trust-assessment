@@ -4,6 +4,7 @@
     -Partner -PartnerIdDesired 1234567
     -LicenseReview
     -SecureScore
+    -KeepZtExport   (optional; keeps the zt-export folder instead of deleting it)
 #>
 
 [CmdletBinding()]
@@ -39,6 +40,9 @@ param(
 
     [Parameter(Mandatory = $false)]
     [switch]$SecureScore,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$KeepZtExport,
 
     [Parameter(Mandatory = $false)]
     [switch]$OpenOutput
@@ -401,7 +405,7 @@ function Invoke-SecureScoreExport {
 }
 #endregion Secure Score
 
-#region ZTA Report -> Actionable CSV + folder structure
+#region ZTA Report -> Actionable CSV + folder structure (Assessment Report)
 function Get-JsonArrayTextFromZtaHtml {
     param([Parameter(Mandatory)][string]$Text)
 
@@ -464,7 +468,10 @@ function Export-ZtaActionableCsv {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string]$OutputPath
+        [string]$OutputPath,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$KeepZtExport
     )
 
     $assessmentFolder = Join-Path $OutputPath "Assessment Report"
@@ -479,6 +486,7 @@ function Export-ZtaActionableCsv {
         throw "No HTML report found in output folder: $OutputPath"
     }
 
+    # Parse HTML -> embedded JSON -> objects
     $html = Get-Content -Path $htmlReportPath -Raw -Encoding UTF8
 
     $jsonText = Get-JsonArrayTextFromZtaHtml -Text $html
@@ -502,6 +510,7 @@ function Export-ZtaActionableCsv {
         }
     }
 
+    # Build actionable rows
     $rows = foreach ($t in $tests) {
         $rem = Get-ZtaRemediationText -Desc ([string]$t.TestDescription)
 
@@ -532,19 +541,23 @@ function Export-ZtaActionableCsv {
         if ($htmlReportPath -ne $destHtml) {
             Move-Item -LiteralPath $htmlReportPath -Destination $destHtml -Force -ErrorAction Stop
         }
-    } catch {}
+    }
+    catch {
+        Write-Host "[WARN] Failed to move HTML report into Assessment Report: $($_.Exception.Message)"
+    }
 
-    # Move zt-export folder into Assessment Report folder (if present)
-    try {
-        $ztExportPath = Join-Path $OutputPath "zt-export"
-        if (Test-Path -LiteralPath $ztExportPath) {
-            $destZtExport = Join-Path $assessmentFolder "zt-export"
-            if (Test-Path -LiteralPath $destZtExport) {
-                Remove-Item -LiteralPath $destZtExport -Recurse -Force -ErrorAction SilentlyContinue
+    # Delete zt-export by default (keep only if -KeepZtExport is used)
+    if (-not $KeepZtExport) {
+        try {
+            $ztExportPath = Join-Path $OutputPath "zt-export"
+            if (Test-Path -LiteralPath $ztExportPath) {
+                Remove-Item -LiteralPath $ztExportPath -Recurse -Force -ErrorAction Stop
             }
-            Move-Item -LiteralPath $ztExportPath -Destination $destZtExport -Force -ErrorAction Stop
         }
-    } catch {}
+        catch {
+            Write-Host "[WARN] Cleanup failed (zt-export not deleted): $($_.Exception.Message)"
+        }
+    }
 
     return @{
         AssessmentFolder = $assessmentFolder
@@ -595,7 +608,7 @@ try {
 
     # Export actionable CSV and organize assessment artifacts into: Assessment Report\
     try {
-        $export = Export-ZtaActionableCsv -OutputPath $OutputPath
+        $export = Export-ZtaActionableCsv -OutputPath $OutputPath -KeepZtExport:$KeepZtExport
     }
     catch {
         Write-Host "[WARN] HTML-to-CSV export/organization failed: $($_.Exception.Message)"
@@ -626,14 +639,16 @@ catch {
 }
 finally {
     # Always attempt to disconnect; keep silent
-    #$null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
-    #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
-    #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
+    $null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
+    $null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
+    $null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
     Invoke-SelfDelete -ScriptPath $scriptPath
 
-    # Open run folder; if it fails, do nothing (path is already shown in the final [INFO] line)
-    try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
+    # Open run folder only if requested
+    if ($OpenOutput) {
+        try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
+    }
 
     Write-Host ""
     Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
