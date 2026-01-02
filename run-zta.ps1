@@ -883,9 +883,9 @@ catch {
     throw
 }
 finally {
-    $null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
-    $null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
-    $null = Disconnect-MgGraph -ErrorAction SilentlyContinue
+    #$null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
+    #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
+    #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
     Invoke-SelfDelete -ScriptPath $scriptPath
 
