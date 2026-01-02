@@ -14,7 +14,7 @@
     - Move HTML report into Assessment Report
     - Generate Executive Summary DOCX in Assessment Report (if template exists)
       Template filename expected:
-        ZeroTrustAssessment_ExecutiveSummary_Template_CC.docx
+        ZeroTrustAssessment_ExecutiveSummary_Template.docx
       Uses Content Controls (Tag/Title keys) + bookmark: TopRisksTableSpot
 
     Notes:
@@ -564,12 +564,12 @@ function Export-ZtaActionableCsv {
 }
 #endregion ZTA export
 
-#region Executive Summary (Content Controls + SaveAs; template ends with _CC.docx)
+#region Executive Summary (Content Controls + SaveAs; template ends with .docx)
 function Resolve-ExecutiveSummaryTemplatePath {
     [CmdletBinding()]
     param([Parameter(Mandatory = $false)][string]$ProvidedPath)
 
-    $fileName = "ZeroTrustAssessment_ExecutiveSummary_Template_CC.docx"
+    $fileName = "ZeroTrustAssessment_ExecutiveSummary_Template.docx"
 
     if (-not [string]::IsNullOrWhiteSpace($ProvidedPath) -and (Test-Path -LiteralPath $ProvidedPath)) {
         return (Resolve-Path -LiteralPath $ProvidedPath).Path
@@ -872,7 +872,7 @@ try {
             $resolvedTemplate = Resolve-ExecutiveSummaryTemplatePath -ProvidedPath $ExecutiveSummaryTemplatePath
 
             if (-not $resolvedTemplate) {
-                Write-Host "[WARN] Executive Summary template not found (expected name: ZeroTrustAssessment_ExecutiveSummary_Template_CC.docx)."
+                Write-Host "[WARN] Executive Summary template not found (expected name: ZeroTrustAssessment_ExecutiveSummary_Template.docx)."
                 Write-Host "[WARN] Place it next to the script OR run from the repo root OR pass -ExecutiveSummaryTemplatePath."
             }
             else {
