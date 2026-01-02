@@ -1,4 +1,3 @@
-```powershell
 <#
     FLAGS:
     -Partner
@@ -943,4 +942,3 @@ finally {
     [void][System.Console]::ReadKey($true)
     Write-Host ""
 }
-```
