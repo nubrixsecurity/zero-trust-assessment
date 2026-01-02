@@ -576,6 +576,58 @@ function Export-ZtaActionableCsv {
 #endregion ZTA export
 
 #region Executive Summary (Content Controls + SaveAs; template: ZeroTrustAssessment_ExecutiveSummary_Template.docx)
+
+# Template download source (GitHub URL; blob URL is OK - script will convert to raw)
+$ExecutiveSummaryTemplateUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/ZeroTrustAssessment_ExecutiveSummary_Template.docx"
+
+function Convert-GitHubUrlToRaw {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Url)
+
+    # Convert:
+    # https://github.com/<org>/<repo>/blob/<branch>/<path>
+    # -> https://raw.githubusercontent.com/<org>/<repo>/<branch>/<path>
+    if ($Url -match '^https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.*)$') {
+        $org    = $Matches[1]
+        $repo   = $Matches[2]
+        $branch = $Matches[3]
+        $path   = $Matches[4]
+        return "https://raw.githubusercontent.com/$org/$repo/$branch/$path"
+    }
+
+    return $Url
+}
+
+function Get-ExecutiveSummaryTemplateFromTempOrDownload {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$TemplateUrl
+    )
+
+    $fileName = "ZeroTrustAssessment_ExecutiveSummary_Template.docx"
+    $tempPath = Join-Path $env:TEMP $fileName
+
+    # If already downloaded in temp, use it
+    if (Test-Path -LiteralPath $tempPath) {
+        return $tempPath
+    }
+
+    $rawUrl = Convert-GitHubUrlToRaw -Url $TemplateUrl
+
+    try {
+        $oldPP = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $rawUrl -OutFile $tempPath -ErrorAction Stop
+        return $tempPath
+    }
+    catch {
+        return $null
+    }
+    finally {
+        $ProgressPreference = $oldPP
+    }
+}
+
 function Resolve-ExecutiveSummaryTemplatePath {
     [CmdletBinding()]
     param([Parameter(Mandatory = $false)][string]$ProvidedPath)
@@ -594,6 +646,12 @@ function Resolve-ExecutiveSummaryTemplatePath {
 
     $p3 = Join-Path (Join-Path $env:USERPROFILE "Downloads") $fileName
     if (Test-Path -LiteralPath $p3) { return $p3 }
+
+    # NEW: Download to %TEMP% from GitHub (raw) as a fallback
+    if (-not [string]::IsNullOrWhiteSpace($script:ExecutiveSummaryTemplateUrl)) {
+        $tempTemplate = Get-ExecutiveSummaryTemplateFromTempOrDownload -TemplateUrl $script:ExecutiveSummaryTemplateUrl
+        if ($tempTemplate -and (Test-Path -LiteralPath $tempTemplate)) { return $tempTemplate }
+    }
 
     return $null
 }
@@ -622,7 +680,7 @@ function Get-ContentControlByKey {
     return $null
 }
 
-# NEW: match Rich Text content controls by their placeholder text (Range.Text), when Tag/Title are empty
+# Match Rich Text content controls by their placeholder text (Range.Text), when Tag/Title are empty
 function Get-ContentControlByPlaceholderText {
     param(
         [Parameter(Mandatory)]$Doc,
@@ -631,11 +689,11 @@ function Get-ContentControlByPlaceholderText {
 
     foreach ($cc in @($Doc.ContentControls)) {
         try {
-            $rt = $null
-            try { $rt = $cc.Range.Text } catch { $rt = $null }
+            $text = $null
+            try { $text = $cc.Range.Text } catch { $text = $null }
 
-            if (-not [string]::IsNullOrWhiteSpace($rt)) {
-                if ($rt.Trim() -eq $Key) { return $cc }
+            if (-not [string]::IsNullOrWhiteSpace($text)) {
+                if ($text.Trim() -eq $Key) { return $cc }
             }
         } catch {}
     }
@@ -661,8 +719,10 @@ function Set-RichCCValue {
     if (-not $cc) { return $false }
 
     try {
-        $cc.Range.Text = ""
-        $cc.Range.Text = $Text
+        # Match your working approach (more reliable for Rich Text CCs)
+        $cc.LockContents = $false
+        $cc.Range.Delete()
+        $cc.Range.InsertAfter($Text)
         return $true
     } catch { return $false }
 }
@@ -884,6 +944,7 @@ function New-ZtaExecutiveSummaryDoc {
         [GC]::WaitForPendingFinalizers()
     }
 }
+
 #endregion Executive Summary
 
 #region Self-delete (best-effort)
