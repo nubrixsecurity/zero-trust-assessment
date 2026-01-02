@@ -7,10 +7,16 @@
     -KeepZtExport   (optional; keeps the zt-export folder instead of deleting it)
     -OpenOutput     (optional; opens OutputPath at end)
 
-    Executive Summary:
-    - Template filename:
+    ALWAYS (no flag):
+    - Create Assessment Report folder
+    - Parse HTML report
+    - Export Actionable CSV into Assessment Report
+    - Move HTML report into Assessment Report
+    - Generate Executive Summary docx in Assessment Report (if template exists)
+
+    Executive Summary template:
       ZeroTrustAssessment_ExecutiveSummary_Template.docx
-    - Template resolution order:
+    Resolution order:
       1) -ExecutiveSummaryTemplatePath (if provided and exists)
       2) $PSScriptRoot
       3) Current working directory
@@ -54,15 +60,18 @@ param(
     [Parameter(Mandatory = $false)]
     [switch]$KeepZtExport,
 
+    # Optional override for template location (recommended if script runs from Temp)
     [Parameter(Mandatory = $false)]
     [string]$ExecutiveSummaryTemplatePath,
 
+    # Optional metadata for placeholders
     [Parameter(Mandatory = $false)]
     [string]$CustomerName,
 
     [Parameter(Mandatory = $false)]
     [string]$PreparedBy = "Nubrix Security",
 
+    # Optional override; if omitted, script generates a paragraph
     [Parameter(Mandatory = $false)]
     [string]$ExecutiveSummaryText,
 
@@ -532,7 +541,7 @@ function Export-ZtaActionableCsv {
         }
     } catch {}
 
-    # Delete zt-export by default (SILENT; suppress progress message)
+    # Delete zt-export by default (SILENT; suppress progress output)
     if (-not $KeepZtExport) {
         $oldPP = $ProgressPreference
         $ProgressPreference = 'SilentlyContinue'
@@ -541,7 +550,8 @@ function Export-ZtaActionableCsv {
             if (Test-Path -LiteralPath $ztExportPath) {
                 Remove-Item -LiteralPath $ztExportPath -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
             }
-        } finally {
+        }
+        finally {
             $ProgressPreference = $oldPP
         }
     }
@@ -554,7 +564,7 @@ function Export-ZtaActionableCsv {
 }
 #endregion ZTA export
 
-#region Executive Summary helpers
+#region Executive Summary helpers + Word COM populate
 function Resolve-ExecutiveSummaryTemplatePath {
     [CmdletBinding()]
     param([Parameter(Mandatory = $false)][string]$ProvidedPath)
@@ -611,6 +621,7 @@ function Replace-DocPlaceholders {
         $find = $range.Find
         $find.ClearFormatting() | Out-Null
         $find.Replacement.ClearFormatting() | Out-Null
+        # wdReplaceAll = 2
         $null = $find.Execute($k, $false, $true, $false, $false, $false, $true, 1, $false, [string]$Map[$k], 2)
     }
 }
@@ -655,9 +666,7 @@ function Populate-TopRisksTable {
         }
 
         foreach ($col in $vals.Keys) {
-            try {
-                $target.Cell($rowIndex, $col).Range.Text = $vals[$col]
-            } catch {}
+            try { $target.Cell($rowIndex, $col).Range.Text = $vals[$col] } catch {}
         }
     }
 }
@@ -723,7 +732,7 @@ function New-ZtaExecutiveSummaryDoc {
 
     $outDoc = Join-Path $AssessmentFolder "ZeroTrustAssessment_ExecutiveSummary.docx"
 
-    # Always copy template so file exists even if population fails
+    # Always create the output file (copy template) even if population fails
     Copy-Item -LiteralPath $TemplatePath -Destination $outDoc -Force
 
     if (-not (Test-WordComAvailable)) {
@@ -804,24 +813,29 @@ try {
     Write-Host "[INFO] Running Zero Trust Assessment..."
     Invoke-ZtAssessment -Path $OutputPath
 
+    # ALWAYS: Actionable CSV + move HTML + delete zt-export (default)
     $export = $null
     try {
         $export = Export-ZtaActionableCsv -OutputPath $OutputPath -KeepZtExport:$KeepZtExport
+        Write-Host "[INFO] Actionable CSV saved to: $($export.ActionableCsv)"
     }
     catch {
         Write-Host "[WARN] Failed to generate Actionable CSV: $($_.Exception.Message)"
     }
 
-    # Executive Summary (no risky backtick call chaining)
+    # ALWAYS: Executive Summary (no flag) if Actionable CSV exists and template is found
     try {
         if ($export -and $export.AssessmentFolder -and $export.ActionableCsv -and (Test-Path -LiteralPath $export.ActionableCsv)) {
 
             $resolvedTemplate = Resolve-ExecutiveSummaryTemplatePath -ProvidedPath $ExecutiveSummaryTemplatePath
 
             if (-not $resolvedTemplate) {
-                Write-Host "[WARN] Executive Summary template not found in script folder, current directory, or Downloads. Provide -ExecutiveSummaryTemplatePath."
+                Write-Host "[WARN] Executive Summary template not found (expected name: ZeroTrustAssessment_ExecutiveSummary_Template.docx)."
+                Write-Host "[WARN] Place it next to the script OR run from the repo root OR pass -ExecutiveSummaryTemplatePath."
             }
             else {
+                Write-Host "[INFO] Executive Summary template resolved to: $resolvedTemplate"
+
                 $docPath = New-ZtaExecutiveSummaryDoc -AssessmentFolder $export.AssessmentFolder -TenantId $TenantId -ActionableCsvPath $export.ActionableCsv -TemplatePath $resolvedTemplate -CustomerName $CustomerName -PreparedBy $PreparedBy -ExecutiveSummaryText $ExecutiveSummaryText
 
                 if ($docPath -and (Test-Path -LiteralPath $docPath)) {
@@ -831,6 +845,9 @@ try {
                     Write-Host "[WARN] Executive Summary was not created."
                 }
             }
+        }
+        else {
+            Write-Host "[WARN] Executive Summary skipped because Actionable CSV was not produced."
         }
     }
     catch {
@@ -846,7 +863,12 @@ try {
     }
 
     if ($SecureScore) {
-        try { Invoke-SecureScoreExport -OutputPath $OutputPath } catch { Write-Host "[WARN] Secure Score export failed: $($_.Exception.Message)" }
+        try {
+            Invoke-SecureScoreExport -OutputPath $OutputPath
+        }
+        catch {
+            Write-Host "[WARN] Secure Score export failed: $($_.Exception.Message)"
+        }
     }
 
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
@@ -856,14 +878,14 @@ catch {
     throw
 }
 finally {
-    # Commented out per request
+    # Commented out per request (keep like your screenshot)
     #$null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
     #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
     #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
     Invoke-SelfDelete -ScriptPath $scriptPath
 
-    # Always open output folder at end
+    # Open output folder at end
     try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
 
     Write-Host ""
