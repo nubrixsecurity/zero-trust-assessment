@@ -44,6 +44,17 @@ param(
     [Parameter(Mandatory = $false)]
     [switch]$KeepZtExport,
 
+    # Optional metadata for your branded Word template placeholders (safe to omit)
+    [Parameter(Mandatory = $false)]
+    [string]$CustomerName,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PreparedBy = "Nubrix Security",
+
+    # Optional override; if omitted, the script generates a short executive summary paragraph
+    [Parameter(Mandatory = $false)]
+    [string]$ExecutiveSummaryText,
+
     [Parameter(Mandatory = $false)]
     [switch]$OpenOutput
 )
@@ -55,7 +66,6 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $time = (Get-Date).ToString("HHmmss")
     $OutputPath = Join-Path $base "$date\run-$time"
 }
-
 New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
 #endregion Output path
 
@@ -76,10 +86,7 @@ function Ensure-ModuleInstalled {
         $oldPP = $ProgressPreference
         $WarningPreference = 'SilentlyContinue'
         $ProgressPreference = 'SilentlyContinue'
-        try {
-            Install-Module $Name -Scope CurrentUser -AllowClobber -Force
-        }
-        finally {
+        try { Install-Module $Name -Scope CurrentUser -AllowClobber -Force } finally {
             $WarningPreference = $oldWP
             $ProgressPreference = $oldPP
         }
@@ -91,10 +98,7 @@ function Ensure-ModuleInstalled {
         $oldPP = $ProgressPreference
         $WarningPreference = 'SilentlyContinue'
         $ProgressPreference = 'SilentlyContinue'
-        try {
-            Update-Module $Name -Scope CurrentUser -Force -ErrorAction SilentlyContinue
-        }
-        finally {
+        try { Update-Module $Name -Scope CurrentUser -Force -ErrorAction SilentlyContinue } finally {
             $WarningPreference = $oldWP
             $ProgressPreference = $oldPP
         }
@@ -140,8 +144,7 @@ function Set-ManagementPartnerAssociationSilent {
 
         $ctxTenant = $null
         if ($ctx.Tenant) {
-            if ($ctx.Tenant.Id) { $ctxTenant = $ctx.Tenant.Id }
-            else { $ctxTenant = [string]$ctx.Tenant }
+            if ($ctx.Tenant.Id) { $ctxTenant = $ctx.Tenant.Id } else { $ctxTenant = [string]$ctx.Tenant }
         }
         if ($ctxTenant -and $ctxTenant -ne $TenantId) { return }
 
@@ -182,16 +185,10 @@ function Invoke-LicenseReview {
         Install-Module -Name "Microsoft.Graph.Beta.Users" -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
     }
 
-    $requiredPerms = @(
-        "User.Read.All",
-        "AuditLog.Read.All",
-        "Organization.Read.All",
-        "Directory.Read.All"
-    )
+    $requiredPerms = @("User.Read.All","AuditLog.Read.All","Organization.Read.All","Directory.Read.All")
 
     $ctx = Get-MgContext
     $hasAllPerms = $false
-
     if ($ctx -and $ctx.Scopes) {
         $missing = @()
         foreach ($perm in $requiredPerms) {
@@ -199,7 +196,6 @@ function Invoke-LicenseReview {
         }
         if ($missing.Count -eq 0) { $hasAllPerms = $true }
     }
-
     if (-not $hasAllPerms) {
         Connect-MgGraph -Scopes $requiredPerms -NoWelcome -ErrorAction Stop | Out-Null
     }
@@ -209,13 +205,11 @@ function Invoke-LicenseReview {
 
     $mapFileName = "Product names and service plan identifiers for licensing.csv"
     $mapPath = Join-Path $licenseFolder $mapFileName
-
     if (-not (Test-Path -LiteralPath $mapPath)) {
         Invoke-WebRequest -Uri $LicenseMapUrl -OutFile $mapPath -ErrorAction Stop
     }
 
     $productList = Import-Csv -Path $mapPath
-
     $guidMap = @{}
     foreach ($item in $productList) {
         if ($item.GUID) { $guidMap[$item.GUID] = $item.Product_Display_Name }
@@ -253,7 +247,6 @@ function Ensure-SecureScoreGraphScopes {
     param()
 
     $secureScoreScopes = @("SecurityEvents.Read.All", "Organization.Read.All")
-
     $ctx = Get-MgContext
     $needsConnect = $true
 
@@ -261,7 +254,6 @@ function Ensure-SecureScoreGraphScopes {
         $missing = @($secureScoreScopes | Where-Object { $ctx.Scopes -notcontains $_ })
         if ($missing.Count -eq 0) { $needsConnect = $false }
     }
-
     if ($needsConnect) {
         Connect-MgGraph -Scopes $secureScoreScopes -NoWelcome -ErrorAction Stop | Out-Null
     }
@@ -276,7 +268,6 @@ function Get-SecureScoreAndChart {
         [int]$ChartWidth  = 1200,
         [int]$ChartHeight = 600
     )
-    # returns: @{ OrgName; Percentage; Current; MaxScore; CreatedDate; ChartPath; FolderPath }
 
     $OrgName = "Your Organization"
     try {
@@ -477,23 +468,18 @@ function Export-ZtaActionableCsv {
     $assessmentFolder = Join-Path $OutputPath "Assessment Report"
     New-Item -Path $assessmentFolder -ItemType Directory -Force | Out-Null
 
-    # Find newest HTML report in root output folder
     $htmlReportPath = Get-ChildItem -Path $OutputPath -Filter "*.html" -File -ErrorAction Stop |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1 -ExpandProperty FullName
 
-    if (-not $htmlReportPath) {
-        throw "No HTML report found in output folder: $OutputPath"
-    }
+    if (-not $htmlReportPath) { throw "No HTML report found in output folder: $OutputPath" }
 
-    # Parse HTML -> embedded JSON -> objects
     $html = Get-Content -Path $htmlReportPath -Raw -Encoding UTF8
 
     $jsonText = Get-JsonArrayTextFromZtaHtml -Text $html
-    $jsonText = $jsonText -replace ',(\s*[}\]])', '$1'  # remove common trailing commas
+    $jsonText = $jsonText -replace ',(\s*[}\]])', '$1'
     $tests = $jsonText | ConvertFrom-Json
 
-    # Build RemediationLinks column (joined URLs)
     $linkRegex = '\[([^\]]+)\]\((https?://[^)]+)\)'
     $linkLookup = @{}
 
@@ -505,15 +491,11 @@ function Export-ZtaActionableCsv {
             ForEach-Object { $_.Groups[2].Value } |
             Select-Object -Unique
 
-        if ($urls -and $urls.Count -gt 0) {
-            $linkLookup["$($t.TestId)"] = ($urls -join " | ")
-        }
+        if ($urls -and $urls.Count -gt 0) { $linkLookup["$($t.TestId)"] = ($urls -join " | ") }
     }
 
-    # Build actionable rows
     $rows = foreach ($t in $tests) {
         $rem = Get-ZtaRemediationText -Desc ([string]$t.TestDescription)
-
         [pscustomobject]@{
             TestId                 = $t.TestId
             TestTitle              = $t.TestTitle
@@ -531,32 +513,23 @@ function Export-ZtaActionableCsv {
         }
     }
 
-    # Export actionable CSV into Assessment Report folder
     $outCsv = Join-Path $assessmentFolder "ZeroTrustAssessment_Actionable.csv"
     $rows | Export-Csv -Path $outCsv -NoTypeInformation -Encoding UTF8
 
-    # Move the HTML report into Assessment Report folder
     try {
         $destHtml = Join-Path $assessmentFolder (Split-Path $htmlReportPath -Leaf)
         if ($htmlReportPath -ne $destHtml) {
             Move-Item -LiteralPath $htmlReportPath -Destination $destHtml -Force -ErrorAction Stop
         }
-    }
-    catch {
-        Write-Host "[WARN] Failed to move HTML report into Assessment Report: $($_.Exception.Message)"
-    }
+    } catch {}
 
-    # Delete zt-export by default (keep only if -KeepZtExport is used)
     if (-not $KeepZtExport) {
         try {
             $ztExportPath = Join-Path $OutputPath "zt-export"
             if (Test-Path -LiteralPath $ztExportPath) {
                 Remove-Item -LiteralPath $ztExportPath -Recurse -Force -ErrorAction Stop
             }
-        }
-        catch {
-            Write-Host "[WARN] Cleanup failed (zt-export not deleted): $($_.Exception.Message)"
-        }
+        } catch {}
     }
 
     return @{
@@ -567,6 +540,224 @@ function Export-ZtaActionableCsv {
 }
 #endregion ZTA Report -> Actionable CSV + folder structure
 
+#region Executive Summary (Word template in script root)
+function Get-RiskRank {
+    param([string]$Value)
+    switch -Regex ($Value) {
+        'critical' { return 4 }
+        'high'     { return 3 }
+        'medium'   { return 2 }
+        'low'      { return 1 }
+        default    { return 0 }
+    }
+}
+
+function Find-ExecutiveSummaryTemplate {
+    [CmdletBinding()]
+    param()
+
+    # User said: template is in root (same folder as run-zta.ps1)
+    $root = $PSScriptRoot
+
+    $preferred = Join-Path $root "ZeroTrustAssessment_ExecutiveSummary_Template.docx"
+    if (Test-Path -LiteralPath $preferred) { return $preferred }
+
+    $match = Get-ChildItem -Path $root -File -Filter "*.docx" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match 'executive|summary|zta' } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if ($match) { return $match.FullName }
+
+    return $null
+}
+
+function Replace-DocPlaceholders {
+    param(
+        [Parameter(Mandatory)]$Doc,
+        [Parameter(Mandatory)][hashtable]$Map
+    )
+
+    foreach ($k in $Map.Keys) {
+        $findText = $k
+        $replaceText = [string]$Map[$k]
+
+        # Word Find/Replace (wdReplaceAll = 2)
+        $range = $Doc.Content
+        $find = $range.Find
+        $find.ClearFormatting() | Out-Null
+        $find.Replacement.ClearFormatting() | Out-Null
+        $null = $find.Execute($findText, $false, $true, $false, $false, $false, $true, 1, $false, $replaceText, 2)
+    }
+}
+
+function Populate-TopRisksTable {
+    param(
+        [Parameter(Mandatory)]$Doc,
+        [Parameter(Mandatory)]$TopRisks
+    )
+
+    # Find the first table that looks like the "Top risks" table by checking header cells.
+    $target = $null
+    foreach ($t in $Doc.Tables) {
+        try {
+            $c1 = ($t.Cell(1,1).Range.Text -replace '[\r\a]+','').Trim()
+            $c2 = ($t.Cell(1,2).Range.Text -replace '[\r\a]+','').Trim()
+            $c3 = ($t.Cell(1,3).Range.Text -replace '[\r\a]+','').Trim()
+            if ($c1 -eq 'TestId' -and $c2 -match 'Title' -and $c3 -eq 'Pillar') {
+                $target = $t
+                break
+            }
+        } catch {}
+    }
+
+    if (-not $target) { return }
+
+    # Ensure header + 10 rows
+    $desiredRows = 1 + 10
+    while ($target.Rows.Count -lt $desiredRows) { $null = $target.Rows.Add() }
+    while ($target.Rows.Count -gt $desiredRows) { $target.Rows.Item($target.Rows.Count).Delete() | Out-Null }
+
+    # Fill rows 2..11
+    for ($i = 0; $i -lt 10; $i++) {
+        $rowIndex = $i + 2
+        $item = $null
+        if ($i -lt $TopRisks.Count) { $item = $TopRisks[$i] }
+
+        $vals = @{
+            1 = if ($item) { [string]$item.TestId } else { "" }
+            2 = if ($item) { [string]$item.TestTitle } else { "" }
+            3 = if ($item) { [string]$item.TestPillar } else { "" }
+            4 = if ($item) { [string]$item.TestStatus } else { "" }
+            5 = if ($item) { ("{0} / {1}" -f $item.TestRisk, $item.TestImpact) } else { "" }
+            6 = if ($item) { [string]$item.RemediationLinks } else { "" }
+        }
+
+        foreach ($col in $vals.Keys) {
+            try {
+                $cellRange = $target.Cell($rowIndex, $col).Range
+                $cellRange.Text = $vals[$col]
+            } catch {}
+        }
+    }
+}
+
+function New-ZtaExecutiveSummaryDoc {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$AssessmentFolder,
+
+        [Parameter(Mandatory)]
+        [string]$TenantId,
+
+        [Parameter(Mandatory)]
+        [string]$ActionableCsvPath,
+
+        [Parameter(Mandatory = $false)]
+        [string]$CustomerName,
+
+        [Parameter(Mandatory = $false)]
+        [string]$PreparedBy = "Nubrix Security",
+
+        [Parameter(Mandatory = $false)]
+        [string]$ExecutiveSummaryText
+    )
+
+    $templatePath = Find-ExecutiveSummaryTemplate
+    if (-not $templatePath) { return } # silent best-effort
+
+    if (-not (Test-Path -LiteralPath $ActionableCsvPath)) { return }
+
+    $rows = Import-Csv -Path $ActionableCsvPath
+    if (-not $rows -or $rows.Count -eq 0) { return }
+
+    $runDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $total = $rows.Count
+
+    $fails  = @($rows | Where-Object { $_.TestStatus -match 'fail|at risk|noncompliant|not met' }).Count
+    $passes = @($rows | Where-Object { $_.TestStatus -match 'pass|implemented|compliant' }).Count
+    $manual = $total - $fails - $passes
+
+    $statusBreakdown = $rows | Group-Object TestStatus | Sort-Object Count -Descending |
+        ForEach-Object { "- {0}: {1}" -f (if ([string]::IsNullOrWhiteSpace($_.Name)) { "Unknown" } else { $_.Name }), $_.Count }
+    $statusBreakdownText = if ($statusBreakdown) { ($statusBreakdown -join "`r`n") } else { "" }
+
+    $topPillars = $rows | Where-Object { $_.TestStatus -match 'fail|at risk|noncompliant|not met' } |
+        Group-Object TestPillar | Sort-Object Count -Descending | Select-Object -First 5 |
+        ForEach-Object { "- {0}: {1}" -f (if ([string]::IsNullOrWhiteSpace($_.Name)) { "Unknown" } else { $_.Name }), $_.Count }
+    $topPillarsText = if ($topPillars) { ($topPillars -join "`r`n") } else { "" }
+
+    $topRisks = $rows |
+        ForEach-Object {
+            $_ | Add-Member -NotePropertyName _RiskScore -NotePropertyValue (Get-RiskRank $_.TestRisk) -Force
+            $_ | Add-Member -NotePropertyName _ImpactScore -NotePropertyValue (Get-RiskRank $_.TestImpact) -Force
+            $_
+        } |
+        Sort-Object _RiskScore, _ImpactScore -Descending |
+        Select-Object -First 10
+
+    if ([string]::IsNullOrWhiteSpace($ExecutiveSummaryText)) {
+        $pillarHint = ($topPillars | Select-Object -First 2) -join "; "
+        if ([string]::IsNullOrWhiteSpace($pillarHint)) { $pillarHint = "the major Zero Trust pillars" }
+
+        $ExecutiveSummaryText =
+            "This Zero Trust Assessment produced $total recommendations. " +
+            "A total of $fails items were identified as failed/at risk, and $passes items were identified as passed/implemented. " +
+            "The highest concentration of gaps is typically observed across $pillarHint. " +
+            "Use the Actionable CSV to assign owners and track remediation, and consider converting the results into a phased roadmap (0–30, 30–90, 90–180 days) to align remediation work to business risk."
+    }
+
+    $destDoc = Join-Path $AssessmentFolder "ZeroTrustAssessment_ExecutiveSummary.docx"
+    Copy-Item -LiteralPath $templatePath -Destination $destDoc -Force
+
+    $word = $null
+    $doc = $null
+    try {
+        $word = New-Object -ComObject Word.Application
+        $word.Visible = $false
+        $doc = $word.Documents.Open($destDoc, $false, $false)
+
+        $map = @{
+            "{{customer_name}}"                = $(if ([string]::IsNullOrWhiteSpace($CustomerName)) { "{{customer_name}}" } else { $CustomerName })
+            "{{prepared_by}}"                  = $(if ([string]::IsNullOrWhiteSpace($PreparedBy))   { "Nubrix Security" } else { $PreparedBy })
+            "{{run_date}}"                     = $runDate
+            "{{tenant_id}}"                    = $TenantId
+            "{{executive_summary_paragraph}}"  = $ExecutiveSummaryText
+            "{{total_recommendations}}"        = "$total"
+            "{{failed_count}}"                 = "$fails"
+            "{{passed_count}}"                 = "$passes"
+            "{{manual_or_not_scored_count}}"   = "$manual"
+            "{{status_breakdown_bullets}}"     = $statusBreakdownText
+            "{{top_pillars_bullets}}"          = $topPillarsText
+
+            # Optional sections (leave tokens if you want to manually fill later)
+            "{{roadmap_0_30}}"                 = "{{roadmap_0_30}}"
+            "{{roadmap_30_90}}"                = "{{roadmap_30_90}}"
+            "{{roadmap_90_180}}"               = "{{roadmap_90_180}}"
+            "{{workshop_cta}}"                 = "{{workshop_cta}}"
+            "{{scope_assumptions}}"            = "{{scope_assumptions}}"
+        }
+
+        Replace-DocPlaceholders -Doc $doc -Map $map
+        Populate-TopRisksTable -Doc $doc -TopRisks $topRisks
+
+        $doc.Save()
+    }
+    catch {
+        # silent best-effort (to preserve minimal console output)
+    }
+    finally {
+        try { if ($doc)  { $doc.Close($true) | Out-Null } } catch {}
+        try { if ($word) { $word.Quit() | Out-Null } } catch {}
+        if ($doc)  { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($doc)  | Out-Null } catch {} }
+        if ($word) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null } catch {} }
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+    }
+}
+#endregion Executive Summary
+
 #region Self-delete (best-effort)
 function Invoke-SelfDelete {
     param(
@@ -574,21 +765,13 @@ function Invoke-SelfDelete {
         [string]$ScriptPath
     )
 
-    if ($NoSelfDelete) {
-        return
-    }
-
-    if ([string]::IsNullOrWhiteSpace($ScriptPath) -or -not (Test-Path -LiteralPath $ScriptPath)) {
-        return
-    }
+    if ($NoSelfDelete) { return }
+    if ([string]::IsNullOrWhiteSpace($ScriptPath) -or -not (Test-Path -LiteralPath $ScriptPath)) { return }
 
     try {
         $cmd = "/c ping 127.0.0.1 -n 3 > nul & del /f /q `"$ScriptPath`""
         Start-Process -FilePath "cmd.exe" -ArgumentList $cmd -WindowStyle Hidden | Out-Null
-    }
-    catch {
-        # best-effort
-    }
+    } catch {}
 }
 #endregion Self-delete
 
@@ -607,12 +790,23 @@ try {
     Invoke-ZtAssessment -Path $OutputPath
 
     # Export actionable CSV and organize assessment artifacts into: Assessment Report\
+    $export = $null
     try {
         $export = Export-ZtaActionableCsv -OutputPath $OutputPath -KeepZtExport:$KeepZtExport
-    }
-    catch {
-        Write-Host "[WARN] HTML-to-CSV export/organization failed: $($_.Exception.Message)"
-    }
+    } catch {}
+
+    # Generate Executive Summary docx (best-effort, silent)
+    try {
+        if ($export -and $export.AssessmentFolder -and $export.ActionableCsv) {
+            New-ZtaExecutiveSummaryDoc `
+                -AssessmentFolder $export.AssessmentFolder `
+                -TenantId $TenantId `
+                -ActionableCsvPath $export.ActionableCsv `
+                -CustomerName $CustomerName `
+                -PreparedBy $PreparedBy `
+                -ExecutiveSummaryText $ExecutiveSummaryText
+        }
+    } catch {}
 
     if ($Partner) {
         Set-ManagementPartnerAssociationSilent -TenantId $TenantId -PartnerIdDesired $PartnerIdDesired
@@ -623,12 +817,7 @@ try {
     }
 
     if ($SecureScore) {
-        try {
-            Invoke-SecureScoreExport -OutputPath $OutputPath
-        }
-        catch {
-            Write-Host "[WARN] Secure Score export failed: $($_.Exception.Message)"
-        }
+        try { Invoke-SecureScoreExport -OutputPath $OutputPath } catch {}
     }
 
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
@@ -638,14 +827,12 @@ catch {
     throw
 }
 finally {
-    # Always attempt to disconnect; keep silent
     #$null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
     #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
     #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
     Invoke-SelfDelete -ScriptPath $scriptPath
 
-    # Open run folder only if requested
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
     }
