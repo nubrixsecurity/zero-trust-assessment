@@ -774,6 +774,69 @@ function Get-RiskRank {
     }
 }
 
+function Get-RoadmapText {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$Rows,
+        [Parameter(Mandatory)][ValidateSet('0_30','30_90','90_180')][string]$Window
+    )
+
+    $fail = @(
+        $Rows | Where-Object {
+            $_.TestStatus -match 'fail|at risk|noncompliant|not met'
+        }
+    )
+
+    $topPillars = @(
+        $fail |
+        Group-Object TestPillar |
+        Sort-Object Count -Descending |
+        Select-Object -First 3 |
+        ForEach-Object { $_.Name } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+
+    $pillarText = if ($topPillars.Count -gt 0) {
+        $topPillars -join ", "
+    }
+    else {
+        "Identity, Devices, Applications"
+    }
+
+    switch ($Window) {
+        '0_30' {
+            return @(
+                "Focus on quick wins that reduce immediate risk and harden identity and admin controls.",
+                "Prioritize failed and at-risk findings in pillars: $pillarText.",
+                "Typical actions include enforcing MFA, reducing standing admin access, validating Conditional Access baselines, and addressing critical and high-risk findings."
+            ) -join "`r`n"
+        }
+
+        '30_90' {
+            return @(
+                "Focus on standardization and hardening across identity, devices, and access policies.",
+                "Typical actions include expanding Conditional Access coverage, enforcing device compliance, disabling legacy authentication, and improving monitoring and alerting."
+            ) -join "`r`n"
+        }
+
+        '90_180' {
+            return @(
+                "Focus on governance and operational maturity to sustain Zero Trust improvements.",
+                "Typical actions include implementing access reviews, automating enforcement, formalizing monitoring and response processes, and establishing a regular security posture review cadence."
+            ) -join "`r`n"
+        }
+    }
+}
+
+function Get-WorkshopCtaText {
+    return @(
+        "Zero Trust Roadmap Workshop (optional):",
+        "We will review the assessment findings, validate priorities with stakeholders, and align remediation efforts to business risk.",
+        "Deliverables typically include a phased 90-day remediation backlog with owners, effort estimates, dependencies, and a clear execution roadmap."
+    ) -join "`r`n"
+}
+
+
 # Top Risks table via Rich Text Content Control (NO bookmarks)
 function Add-TopRisksTable_IntoContentControl {
     [CmdletBinding()]
