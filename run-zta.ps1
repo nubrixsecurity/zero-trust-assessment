@@ -849,7 +849,7 @@ try {
     Write-Host "[INFO] Connecting to Zero Trust Assessment (TenantId: $TenantId)..." -f cyan
     Connect-ZtAssessment -TenantId $TenantId
 
-    Write-Host "[INFO] Running Zero Trust Assessment..." -f cyan
+    #Write-Host "[INFO] Running Zero Trust Assessment..." -f cyan
     Invoke-ZtAssessment -Path $OutputPath
 
     # ALWAYS: Actionable CSV + move HTML + delete zt-export (default)
