@@ -668,9 +668,13 @@ function Invoke-ExecSummaryScript {
         return $false
     }
 
-    # Log files (optional but very useful)
+    # Logs (created only if the process writes output)
     $stdoutLog = Join-Path $env:TEMP "zta-execsummary-stdout.log"
     $stderrLog = Join-Path $env:TEMP "zta-execsummary-stderr.log"
+
+    # Ensure clean slate each run (prevents stale logs from confusing troubleshooting)
+    try { Remove-Item -LiteralPath $stdoutLog -Force -ErrorAction SilentlyContinue } catch {}
+    try { Remove-Item -LiteralPath $stderrLog -Force -ErrorAction SilentlyContinue } catch {}
 
     # CRITICAL: quote paths (they contain spaces like "Assessment Report")
     $quotedScript  = '"' + $ScriptPath  + '"'
@@ -684,10 +688,10 @@ function Invoke-ExecSummaryScript {
         "-ContextPath $quotedContext"
     ) -join ' '
 
-    Write-Host "[INFO] Running Exec Summary (pwsh) -> $ScriptPath"
-    Write-Host "[INFO] Using context -> $ContextPath"
-    Write-Host "[INFO] Stdout log: $stdoutLog"
-    Write-Host "[INFO] Stderr log: $stderrLog"
+    Write-Host "[INFO] Running Exec Summary..."
+
+    $success = $false
+    $tempArtifacts = @($stdoutLog, $stderrLog)
 
     try {
         $p = Start-Process `
@@ -699,18 +703,37 @@ function Invoke-ExecSummaryScript {
             -RedirectStandardOutput $stdoutLog `
             -RedirectStandardError  $stderrLog
 
-        if ($p.ExitCode -ne 0) {
+        if ($p.ExitCode -eq 0) {
+            $success = $true
+            return $true
+        }
+        else {
             Write-Host "[WARN] Exec Summary script exited with code: $($p.ExitCode)"
             Write-Host "[WARN] Stdout log: $stdoutLog"
             Write-Host "[WARN] Stderr log: $stderrLog"
             return $false
         }
-
-        return $true
     }
     catch {
         Write-Host "[WARN] Exec Summary failed to launch: $($_.Exception.Message)"
+        Write-Host "[WARN] Stdout log: $stdoutLog"
+        Write-Host "[WARN] Stderr log: $stderrLog"
         return $false
+    }
+    finally {
+        if ($success) {
+            # Quiet cleanup on success
+            foreach ($item in $tempArtifacts) {
+                try {
+                    if ($item -and (Test-Path -LiteralPath $item)) {
+                        Remove-Item -LiteralPath $item -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                catch {
+                    # best-effort cleanup only
+                }
+            }
+        }
     }
 }
 #endregion Exec Summary runner helpers
