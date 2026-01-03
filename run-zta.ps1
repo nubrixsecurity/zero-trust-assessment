@@ -668,30 +668,25 @@ function Invoke-ExecSummaryScript {
         return $false
     }
 
-    # Logs (created only if the process writes output)
+    # Logs: keep ONLY if failure
     $stdoutLog = Join-Path $env:TEMP "zta-execsummary-stdout.log"
     $stderrLog = Join-Path $env:TEMP "zta-execsummary-stderr.log"
 
-    # Ensure clean slate each run (prevents stale logs from confusing troubleshooting)
-    try { Remove-Item -LiteralPath $stdoutLog -Force -ErrorAction SilentlyContinue } catch {}
-    try { Remove-Item -LiteralPath $stderrLog -Force -ErrorAction SilentlyContinue } catch {}
+    # Overwrite old logs each run (so failure logs are current)
+    foreach ($p in @($stdoutLog, $stderrLog)) {
+        try { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue } } catch {}
+    }
 
-    # CRITICAL: quote paths (they contain spaces like "Assessment Report")
+    # Quote paths (they can contain spaces)
     $quotedScript  = '"' + $ScriptPath  + '"'
     $quotedContext = '"' + $ContextPath + '"'
 
-    # Build ONE argument string so quoting is preserved exactly
     $argString = @(
         "-NoProfile"
         "-ExecutionPolicy Bypass"
         "-File $quotedScript"
         "-ContextPath $quotedContext"
     ) -join ' '
-
-    Write-Host "[INFO] Running Exec Summary..."
-
-    $success = $false
-    $tempArtifacts = @($stdoutLog, $stderrLog)
 
     try {
         $p = Start-Process `
@@ -704,36 +699,29 @@ function Invoke-ExecSummaryScript {
             -RedirectStandardError  $stderrLog
 
         if ($p.ExitCode -eq 0) {
-            $success = $true
-            return $true
-        }
-        else {
-            Write-Host "[WARN] Exec Summary script exited with code: $($p.ExitCode)"
-            Write-Host "[WARN] Stdout log: $stdoutLog"
-            Write-Host "[WARN] Stderr log: $stderrLog"
-            return $false
-        }
-    }
-    catch {
-        Write-Host "[WARN] Exec Summary failed to launch: $($_.Exception.Message)"
-        Write-Host "[WARN] Stdout log: $stdoutLog"
-        Write-Host "[WARN] Stderr log: $stderrLog"
-        return $false
-    }
-    finally {
-        if ($success) {
-            # Quiet cleanup on success
-            foreach ($item in $tempArtifacts) {
+            # SUCCESS: delete logs (Option A)
+            foreach ($item in @($stdoutLog, $stderrLog)) {
                 try {
                     if ($item -and (Test-Path -LiteralPath $item)) {
                         Remove-Item -LiteralPath $item -Force -ErrorAction SilentlyContinue
                     }
-                }
-                catch {
-                    # best-effort cleanup only
-                }
+                } catch {}
             }
+            return $true
         }
+
+        # FAILURE: keep logs + show where they are
+        Write-Host "[WARN] Exec Summary script exited with code: $($p.ExitCode)"
+        Write-Host "[WARN] Stdout log: $stdoutLog"
+        Write-Host "[WARN] Stderr log: $stderrLog"
+        return $false
+    }
+    catch {
+        # FAILURE: keep logs (if any were created) + show location
+        Write-Host "[WARN] Exec Summary failed to launch: $($_.Exception.Message)"
+        Write-Host "[WARN] Stdout log: $stdoutLog"
+        Write-Host "[WARN] Stderr log: $stderrLog"
+        return $false
     }
 }
 #endregion Exec Summary runner helpers
