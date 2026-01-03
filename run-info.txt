@@ -1,5 +1,6 @@
 <#
     FLAGS:
+    -ExecSummary
     -SkipSecureScore (optional)
     -SkipLicenseReview (optional)
     -KeepZtExport   (optional; keeps the zt-export folder instead of deleting it)
