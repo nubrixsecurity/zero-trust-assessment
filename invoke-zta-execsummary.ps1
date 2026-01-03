@@ -558,6 +558,8 @@ function New-ZtaExecutiveSummaryDoc_FromContext {
 
 #region ===== Main =====
 try {
+    $ErrorActionPreference = 'Stop'
+
     if (-not (Test-Path -LiteralPath $ContextPath)) {
         throw "Context file not found: $ContextPath"
     }
@@ -585,7 +587,22 @@ try {
     Write-Host "[DONE] Executive Summary saved to: $created"
 }
 catch {
-    Write-Host "[ERROR] $($_.Exception.Message)"
-    throw
+    # Rich error output (line number + stack) so parent can show it
+    Write-Host "[ERROR] Exec Summary failed."
+    Write-Host ("[ERROR] Message: {0}" -f $_.Exception.Message)
+
+    if ($_.Exception.InnerException) {
+        Write-Host ("[ERROR] Inner: {0}" -f $_.Exception.InnerException.Message)
+    }
+
+    if ($_.InvocationInfo) {
+        Write-Host ("[ERROR] At: {0}:{1}" -f $_.InvocationInfo.ScriptName, $_.InvocationInfo.ScriptLineNumber)
+        Write-Host ("[ERROR] Line: {0}" -f $_.InvocationInfo.Line)
+    }
+
+    Write-Host "[ERROR] Stack:"
+    Write-Host $_.ScriptStackTrace
+
+    exit 1
 }
 #endregion
