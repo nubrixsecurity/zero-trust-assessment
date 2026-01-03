@@ -221,7 +221,11 @@ function Set-RichCCValue {
     param(
         [Parameter(Mandatory)]$Doc,
         [Parameter(Mandatory)][string]$Key,
-        [Parameter(Mandatory)][string]$Text
+
+        # IMPORTANT: allow blanks (CustomerName may be empty)
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Text = ""
     )
 
     $cc = Get-ContentControlByKey -Doc $Doc -Key $Key
@@ -230,10 +234,15 @@ function Set-RichCCValue {
 
     try {
         $cc.LockContents = $false
-        $cc.Range.Delete()
+
+        # Clear existing content
+        try { $cc.Range.Delete() } catch {}
+
+        # Insert text (blank is allowed)
         $cc.Range.InsertAfter([string]$Text)
         return $true
-    } catch {
+    }
+    catch {
         return $false
     }
 }
@@ -474,9 +483,15 @@ function New-ZtaExecutiveSummaryDoc_FromContext {
     ) -join "`r`n"
 
     $secureScoreImage = $null
-    if ($Ctx.SecureScoreImage -and (Test-Path -LiteralPath $Ctx.SecureScoreImage)) {
+
+    # Support both keys
+    if ($Ctx.SecureScoreChartPath -and (Test-Path -LiteralPath $Ctx.SecureScoreChartPath)) {
+        $secureScoreImage = [string]$Ctx.SecureScoreChartPath
+    }
+    elseif ($Ctx.SecureScoreImage -and (Test-Path -LiteralPath $Ctx.SecureScoreImage)) {
         $secureScoreImage = [string]$Ctx.SecureScoreImage
     }
+
 
     if (-not (Test-WordComAvailable)) { throw "Microsoft Word COM automation not available." }
 
@@ -569,8 +584,19 @@ try {
     $ctx = $ctxRaw | ConvertFrom-Json
 
     if (-not $ctx.AssessmentFolder) { throw "Context missing: AssessmentFolder" }
-    if (-not $ctx.ActionableCsv)    { throw "Context missing: ActionableCsv" }
-    if (-not $ctx.TenantId)         { throw "Context missing: TenantId" }
+
+    # Support both keys (new main script uses ActionableCsvPath)
+    $actionableCsv = $null
+    if ($ctx.ActionableCsvPath) { $actionableCsv = [string]$ctx.ActionableCsvPath }
+    elseif ($ctx.ActionableCsv) { $actionableCsv = [string]$ctx.ActionableCsv }
+    
+    if ([string]::IsNullOrWhiteSpace($actionableCsv)) { throw "Context missing: ActionableCsvPath/ActionableCsv" }
+    if (-not (Test-Path -LiteralPath $actionableCsv)) { throw "Actionable CSV not found: $actionableCsv" }
+    
+    if (-not $ctx.TenantId) { throw "Context missing: TenantId" }
+    
+    # Normalize into the object your generator expects
+    $ctx | Add-Member -NotePropertyName ActionableCsv -NotePropertyValue $actionableCsv -Force
 
     $assessmentFolder = [string]$ctx.AssessmentFolder
     $outDoc = Join-Path $assessmentFolder $OutFileName
