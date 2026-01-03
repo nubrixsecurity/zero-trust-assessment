@@ -927,10 +927,10 @@ try {
         if ($export -and $export.AssessmentFolder -and $export.ActionableCsv -and (Test-Path -LiteralPath $export.ActionableCsv)) {
     
             $ctxPath = Join-Path $export.AssessmentFolder "ExecutiveSummary.Context.json"
-
+    
             # Resolve CustomerName:
             # - Prefer explicit -CustomerName if provided
-            # - Otherwise, pull tenant displayName from Graph (we assume ZTA connection already loaded MgGraph auth)
+            # - Otherwise, pull tenant displayName from Graph
             $resolvedCustomerName = $null
     
             if (-not [string]::IsNullOrWhiteSpace($CustomerName)) {
@@ -938,7 +938,6 @@ try {
             }
             else {
                 try {
-                    # Prefer Get-MgOrganization if available
                     if (Get-Command Get-MgOrganization -ErrorAction SilentlyContinue) {
                         $org = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
                         if ($org -and -not [string]::IsNullOrWhiteSpace($org.DisplayName)) {
@@ -946,7 +945,6 @@ try {
                         }
                     }
                     else {
-                        # Fallback: Invoke-MgGraphRequest directly
                         if (Get-Command Invoke-MgGraphRequest -ErrorAction SilentlyContinue) {
                             $resp = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/organization?`$select=displayName" -OutputType PSObject -ErrorAction Stop
                             $dn = $resp.value | Select-Object -First 1 -ExpandProperty displayName
@@ -957,7 +955,6 @@ try {
                     }
                 }
                 catch {
-                    # best-effort only
                     $resolvedCustomerName = $null
                 }
             }
@@ -969,7 +966,10 @@ try {
             $ctx = @{
                 TenantId                  = $TenantId
                 SubscriptionId            = $SubscriptionId
-                CustomerName              = $CustomerName
+    
+                # FIX: write the resolved value, not the raw parameter
+                CustomerName              = $resolvedCustomerName
+    
                 PreparedBy                = $PreparedBy
                 OutputPath                = $OutputPath
                 AssessmentFolder          = $export.AssessmentFolder
@@ -978,7 +978,6 @@ try {
                 SecureScoreChartPath      = $script:SecureScoreChartPath
                 SecureScoreSummaryCsvPath = $script:SecureScoreSummaryCsvPath
     
-                # NEW: secure score values for narrative
                 SecureScorePercent        = $script:SecureScorePercent
                 SecureScorePoints         = $script:SecureScorePoints
                 SecureScoreMaxScore       = $script:SecureScoreMaxScore
@@ -1013,7 +1012,6 @@ try {
     catch {
         Write-Host "[WARN] Failed to write context file / run Exec Summary: $($_.Exception.Message)"
     }
-
 
     Write-Host "[INFO] Completed. Results saved to: $OutputPath" -f cyan
 }
