@@ -797,7 +797,7 @@ function Invoke-SelfDelete {
         [string]$ScriptPath,
 
         [Parameter(Mandatory = $false)]
-        [string]$ContextPath
+        [string]$ContextPath,
 
         [Parameter(Mandatory = $false)]
         [string]$mapPath
