@@ -435,6 +435,13 @@ function Invoke-SecureScoreExport {
         ChartPath   = $result.ChartPath
         SummaryPath = $summaryPath
         FolderPath  = $result.FolderPath
+
+        # NEW: pass these through to context.json
+        Current     = [math]::Round($result.Current, 0)
+        MaxScore    = $result.MaxScore
+        Percentage  = $result.Percentage
+        CreatedDate = $result.CreatedDate
+        OrgName     = $result.OrgName
     }
 }
 #endregion Secure Score
@@ -822,6 +829,11 @@ function Invoke-SelfDelete {
 
 $scriptPath = $MyInvocation.MyCommand.Path
 $ContextPath = $MyInvocation.MyCommand.Path
+$script:SecureScorePercent    = $null
+$script:SecureScorePoints     = $null
+$script:SecureScoreMaxScore   = $null
+$script:SecureScoreCreatedDate= $null
+
 
 # Tracking outputs for context file
 $script:SecureScoreChartPath = $null
@@ -849,14 +861,16 @@ try {
         Write-Host "[WARN] Failed to generate Actionable CSV: $($_.Exception.Message)"
     }
 
-    # DEFAULT RUN: Secure Score export (unless skipped)
+   # DEFAULT RUN: Secure Score export (unless skipped)
     if (-not $SkipSecureScore) {
         try {
             $ss = Invoke-SecureScoreExport -OutputPath $OutputPath
-
+    
+            # Capture chart path (existing behavior)
             if ($ss -and $ss.ChartPath -and (Test-Path -LiteralPath $ss.ChartPath)) {
                 $script:SecureScoreChartPath = $ss.ChartPath
-            } else {
+            }
+            else {
                 # fallback: discover chart by search
                 $secureScoreFolder = Join-Path $OutputPath "Secure Score"
                 if (Test-Path -LiteralPath $secureScoreFolder) {
@@ -865,19 +879,28 @@ try {
                         Select-Object -First 1 -ExpandProperty FullName
                 }
             }
-
+    
+            # Capture summary CSV path (existing behavior)
             if ($ss -and $ss.SummaryPath -and (Test-Path -LiteralPath $ss.SummaryPath)) {
                 $script:SecureScoreSummaryCsvPath = $ss.SummaryPath
-            } else {
+            }
+            else {
                 $maybe = Join-Path (Join-Path $OutputPath "Secure Score") "SecureScore_Summary.csv"
                 if (Test-Path -LiteralPath $maybe) { $script:SecureScoreSummaryCsvPath = $maybe }
+            }
+    
+            # NEW: Capture Secure Score values for exec summary narrative (points/max/percent/date)
+            if ($ss) {
+                if ($ss.ContainsKey('Percentage'))  { $script:SecureScorePercent      = $ss.Percentage }
+                if ($ss.ContainsKey('Current'))     { $script:SecureScorePoints       = $ss.Current }
+                if ($ss.ContainsKey('MaxScore'))    { $script:SecureScoreMaxScore     = $ss.MaxScore }
+                if ($ss.ContainsKey('CreatedDate')) { $script:SecureScoreCreatedDate  = $ss.CreatedDate }
             }
         }
         catch {
             Write-Host "[WARN] Secure Score export failed: $($_.Exception.Message)"
         }
     }
-
     # DEFAULT RUN: License Review export (unless skipped)
     if (-not $SkipLicenseReview) {
         try {
@@ -905,49 +928,10 @@ try {
     
             $ctxPath = Join-Path $export.AssessmentFolder "ExecutiveSummary.Context.json"
     
-            # Resolve CustomerName:
-            # - Use provided -CustomerName if present
-            # - Else pull tenant displayName from Graph (best-effort; no module installs)
-            $resolvedCustomerName = $CustomerName
-            if ([string]::IsNullOrWhiteSpace($resolvedCustomerName)) {
-                try {
-                    $ctxMg = $null
-                    try { $ctxMg = Get-MgContext } catch { $ctxMg = $null }
-    
-                    $hasOrgScope = $false
-                    if ($ctxMg -and $ctxMg.Scopes) {
-                        if ($ctxMg.Scopes -contains "Organization.Read.All" -or $ctxMg.Scopes -contains "Directory.Read.All") {
-                            $hasOrgScope = $true
-                        }
-                    }
-    
-                    if (-not $hasOrgScope) {
-                        try { Connect-MgGraph -Scopes @("Organization.Read.All") -NoWelcome -ErrorAction Stop | Out-Null } catch {}
-                    }
-    
-                    if (Get-Command Get-MgOrganization -ErrorAction SilentlyContinue) {
-                        $org = Get-MgOrganization -Property DisplayName -ErrorAction Stop | Select-Object -First 1
-                        if ($org -and -not [string]::IsNullOrWhiteSpace($org.DisplayName)) {
-                            $resolvedCustomerName = $org.DisplayName
-                        }
-                    }
-                    else {
-                        $resp = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/organization?`$select=displayName" -OutputType PSObject -ErrorAction Stop
-                        $dn = $resp.value | Select-Object -First 1 -ExpandProperty displayName -ErrorAction SilentlyContinue
-                        if (-not [string]::IsNullOrWhiteSpace($dn)) {
-                            $resolvedCustomerName = $dn
-                        }
-                    }
-                }
-                catch {
-                    # best-effort only; leave empty if we can't resolve
-                }
-            }
-    
             $ctx = @{
                 TenantId                  = $TenantId
                 SubscriptionId            = $SubscriptionId
-                CustomerName              = ([string]$resolvedCustomerName).Trim()
+                CustomerName              = $CustomerName
                 PreparedBy                = $PreparedBy
                 OutputPath                = $OutputPath
                 AssessmentFolder          = $export.AssessmentFolder
@@ -956,15 +940,19 @@ try {
                 SecureScoreChartPath      = $script:SecureScoreChartPath
                 SecureScoreSummaryCsvPath = $script:SecureScoreSummaryCsvPath
     
+                # NEW: secure score values for narrative
+                SecureScorePercent        = $script:SecureScorePercent
+                SecureScorePoints         = $script:SecureScorePoints
+                SecureScoreMaxScore       = $script:SecureScoreMaxScore
+                SecureScoreCreatedDate    = $script:SecureScoreCreatedDate
+    
                 LicenseReviewCsvPath      = $script:LicenseReviewCsvPath
     
                 CreatedUtc                = (Get-Date).ToUniversalTime().ToString("o")
             }
     
-            # Write context (silent)
             $null = Write-ExecSummaryContextFile -ContextPath $ctxPath -Context $ctx
     
-            # OPTIONAL: run Exec Summary generator (separate script) if requested
             if ($ExecSummary) {
                 $execSummaryUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/invoke-zta-execsummary.ps1"
                 $execScript = Get-ExecSummaryScriptFromTempOrDownload -ScriptUrl $execSummaryUrl
