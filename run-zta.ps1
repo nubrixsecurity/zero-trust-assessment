@@ -834,10 +834,10 @@ try {
     Clear-AzConfig -Scope CurrentUser -Force -ErrorAction Ignore | Out-Null
     Update-AzConfig -DefaultSubscriptionForLogin $SubscriptionId -Scope CurrentUser | Out-Null
 
-    Write-Host "[INFO] Connecting to Zero Trust Assessment (TenantId: $TenantId)..."
+    Write-Host "[INFO] Connecting to Zero Trust Assessment (TenantId: $TenantId)..." -f cyan
     Connect-ZtAssessment -TenantId $TenantId
 
-    Write-Host "[INFO] Running Zero Trust Assessment..."
+    Write-Host "[INFO] Running Zero Trust Assessment..." -f cyan
     Invoke-ZtAssessment -Path $OutputPath
 
     # ALWAYS: Actionable CSV + move HTML + delete zt-export (default)
@@ -989,7 +989,7 @@ try {
     }
 
 
-    Write-Host "[INFO] Completed. Results saved to: $OutputPath"
+    Write-Host "[INFO] Completed. Results saved to: $OutputPath" -f cyan
 }
 catch {
     Write-Error $_.Exception.Message
