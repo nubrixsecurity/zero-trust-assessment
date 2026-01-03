@@ -668,58 +668,50 @@ function Invoke-ExecSummaryScript {
         return $false
     }
 
-    $args = @(
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", $ScriptPath,
-        "-ContextPath", $ContextPath
-    )
+    # Log files (optional but very useful)
+    $stdoutLog = Join-Path $env:TEMP "zta-execsummary-stdout.log"
+    $stderrLog = Join-Path $env:TEMP "zta-execsummary-stderr.log"
+
+    # CRITICAL: quote paths (they contain spaces like "Assessment Report")
+    $quotedScript  = '"' + $ScriptPath  + '"'
+    $quotedContext = '"' + $ContextPath + '"'
+
+    # Build ONE argument string so quoting is preserved exactly
+    $argString = @(
+        "-NoProfile"
+        "-ExecutionPolicy Bypass"
+        "-File $quotedScript"
+        "-ContextPath $quotedContext"
+    ) -join ' '
 
     Write-Host "[INFO] Running Exec Summary (pwsh) -> $ScriptPath"
     Write-Host "[INFO] Using context -> $ContextPath"
-
-    # Capture output to temp logs so we can see WHY it exited 1
-    $stdoutPath = Join-Path $env:TEMP "zta-execsummary-stdout.log"
-    $stderrPath = Join-Path $env:TEMP "zta-execsummary-stderr.log"
+    Write-Host "[INFO] Stdout log: $stdoutLog"
+    Write-Host "[INFO] Stderr log: $stderrLog"
 
     try {
-        if (Test-Path $stdoutPath) { Remove-Item $stdoutPath -Force -ErrorAction SilentlyContinue }
-        if (Test-Path $stderrPath) { Remove-Item $stderrPath -Force -ErrorAction SilentlyContinue }
-    } catch {}
+        $p = Start-Process `
+            -FilePath $pwsh `
+            -ArgumentList $argString `
+            -Wait `
+            -PassThru `
+            -NoNewWindow `
+            -RedirectStandardOutput $stdoutLog `
+            -RedirectStandardError  $stderrLog
 
-    $p = Start-Process -FilePath $pwsh `
-        -ArgumentList $args `
-        -Wait -PassThru `
-        -NoNewWindow `
-        -RedirectStandardOutput $stdoutPath `
-        -RedirectStandardError  $stderrPath
-
-    # Print captured output to console (so you can paste it here)
-    try {
-        if (Test-Path $stdoutPath) {
-            $out = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
-            if (-not [string]::IsNullOrWhiteSpace($out)) {
-                Write-Host "[INFO] Exec Summary output:"
-                Write-Host $out
-            }
+        if ($p.ExitCode -ne 0) {
+            Write-Host "[WARN] Exec Summary script exited with code: $($p.ExitCode)"
+            Write-Host "[WARN] Stdout log: $stdoutLog"
+            Write-Host "[WARN] Stderr log: $stderrLog"
+            return $false
         }
-        if (Test-Path $stderrPath) {
-            $err = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
-            if (-not [string]::IsNullOrWhiteSpace($err)) {
-                Write-Host "[WARN] Exec Summary error output:"
-                Write-Host $err
-            }
-        }
-    } catch {}
 
-    if ($p.ExitCode -ne 0) {
-        Write-Host "[WARN] Exec Summary script exited with code: $($p.ExitCode)"
-        Write-Host "[WARN] Stdout log: $stdoutPath"
-        Write-Host "[WARN] Stderr log: $stderrPath"
+        return $true
+    }
+    catch {
+        Write-Host "[WARN] Exec Summary failed to launch: $($_.Exception.Message)"
         return $false
     }
-
-    return $true
 }
 #endregion Exec Summary runner helpers
 
