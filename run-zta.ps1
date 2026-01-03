@@ -833,21 +833,46 @@ try {
         
     # OPTIONAL: run Exec Summary generator (separate script) if requested
     if ($ExecSummary) {
-        $execSummaryUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/invoke-zta-execsummary.ps1"
-        $execScript = Get-ExecSummaryScriptFromTempOrDownload -ScriptUrl $execSummaryUrl
     
-        if ($execScript) {
-            $ok = Invoke-ExecSummaryScript -ScriptPath $execScript -ContextPath $ctxPath
-            if ($ok) {
-                Write-Host "[INFO] Exec Summary completed."
-            } else {
-                Write-Host "[WARN] Exec Summary did not complete successfully."
+        # Only run if we successfully wrote the context file
+        if (-not $ctxPath -or -not (Test-Path -LiteralPath $ctxPath)) {
+            Write-Host "[WARN] Exec Summary requested, but context file not found. Skipping."
+        }
+        else {
+            $execSummaryUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/invoke-zta-execsummary.ps1"
+            $execScript = Get-ExecSummaryScriptFromTempOrDownload -ScriptUrl $execSummaryUrl
+    
+            if (-not $execScript -or -not (Test-Path -LiteralPath $execScript)) {
+                Write-Host "[WARN] Exec Summary script could not be downloaded. Skipping."
             }
-        } else {
-            Write-Host "[WARN] Exec Summary script could not be downloaded."
+            else {
+                Write-Host "[INFO] Exec Summary script resolved to: $execScript"
+                Write-Host "[INFO] Exec Summary context path: $ctxPath"
+    
+                # IMPORTANT: don't rely on the downloaded script being in PATH; call pwsh explicitly
+                try {
+                    $args = @(
+                        "-NoProfile",
+                        "-ExecutionPolicy", "Bypass",
+                        "-File", $execScript,
+                        "-ContextPath", $ctxPath
+                    )
+    
+                    $p = Start-Process -FilePath "pwsh" -ArgumentList $args -Wait -PassThru -NoNewWindow
+    
+                    if ($p.ExitCode -eq 0) {
+                        Write-Host "[INFO] Exec Summary completed."
+                    }
+                    else {
+                        Write-Host "[WARN] Exec Summary returned exit code: $($p.ExitCode)"
+                    }
+                }
+                catch {
+                    Write-Host "[WARN] Exec Summary failed to launch: $($_.Exception.Message)"
+                }
+            }
         }
     }
-
 
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
 }
