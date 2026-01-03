@@ -372,7 +372,6 @@ function Add-TopRisksTable_IntoContentControl {
         $tbl.Cell(1,3).Range.Text = "Pillar"
         $tbl.Cell(1,4).Range.Text = "Status"
         $tbl.Cell(1,5).Range.Text = "Risk/Impact"
-        $tbl.Cell(1,6).Range.Text = "Remediation Links"
 
         for ($i = 0; $i -lt 10; $i++) {
             $r = $i + 2
@@ -384,7 +383,6 @@ function Add-TopRisksTable_IntoContentControl {
             $tbl.Cell($r,3).Range.Text = if ($item) { [string]$item.TestPillar } else { "" }
             $tbl.Cell($r,4).Range.Text = if ($item) { [string]$item.TestStatus } else { "" }
             $tbl.Cell($r,5).Range.Text = if ($item) { ("{0} / {1}" -f $item.TestRisk, $item.TestImpact) } else { "" }
-            $tbl.Cell($r,6).Range.Text = if ($item) { [string]$item.RemediationLinks } else { "" }
         }
 
         return $true
@@ -420,7 +418,6 @@ function New-ZtaExecutiveSummaryDoc_FromContext {
         $impact = $r.TestImpact; if (-not $impact) { $impact = $r.Impact }
         $id     = $r.TestId;     if (-not $id)     { $id     = $r.Id }
         $title  = $r.TestTitle;  if (-not $title)  { $title  = $r.Title }
-        $links  = $r.RemediationLinks
 
         [pscustomobject]@{
             TestId           = $id
@@ -429,7 +426,6 @@ function New-ZtaExecutiveSummaryDoc_FromContext {
             TestPillar       = $pillar
             TestRisk         = $risk
             TestImpact       = $impact
-            RemediationLinks = $links
         }
     }
 
