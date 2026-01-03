@@ -817,26 +817,25 @@ function Invoke-SelfDelete {
         # Use Windows PowerShell for maximum compatibility
         $psExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
 
-        $command = @'
-            Start-Sleep -Seconds 3
-            
-            foreach ($p in $args) {
-                if ([string]::IsNullOrWhiteSpace($p)) { continue }
-            
-                # Retry a few times in case the file is briefly locked
-                for ($i = 0; $i -lt 10; $i++) {
-                    try {
-                        if (Test-Path -LiteralPath $p) {
-                            Remove-Item -LiteralPath $p -Force -ErrorAction Stop
-                        }
-                        break
-                    }
-                    catch {
-                        Start-Sleep -Milliseconds 500
-                    }
-                }
+$command = @'
+Start-Sleep -Seconds 3
+
+foreach ($p in $args) {
+    if ([string]::IsNullOrWhiteSpace($p)) { continue }
+
+    for ($i = 0; $i -lt 10; $i++) {
+        try {
+            if (Test-Path -LiteralPath $p) {
+                Remove-Item -LiteralPath $p -Force -ErrorAction Stop
             }
-            '@
+            break
+        }
+        catch {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+'@
 
         $argList = @(
             "-NoProfile",
