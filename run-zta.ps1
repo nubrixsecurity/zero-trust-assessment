@@ -847,16 +847,20 @@ try {
             if ($ExecSummary) {
                 $execSummaryUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/invoke-zta-execsummary.ps1"
                 $execScript = Get-ExecSummaryScriptFromTempOrDownload -ScriptUrl $execSummaryUrl
-    
-                if ($execScript) {
+            
+                if (-not $execScript -or -not (Test-Path -LiteralPath $execScript)) {
+                    Write-Host "[WARN] Exec Summary script could not be downloaded. Skipping."
+                }
+                else {
+                    Write-Host "[INFO] Exec Summary script resolved to: $execScript"
+                    Write-Host "[INFO] Exec Summary context path: $ctxPath"
+            
                     $ok = Invoke-ExecSummaryScript -ScriptPath $execScript -ContextPath $ctxPath
                     if ($ok) {
                         Write-Host "[INFO] Exec Summary completed."
                     } else {
                         Write-Host "[WARN] Exec Summary did not complete successfully."
                     }
-                } else {
-                    Write-Host "[WARN] Exec Summary script could not be downloaded."
                 }
             }
         }
