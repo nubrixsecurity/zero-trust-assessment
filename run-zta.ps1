@@ -798,6 +798,9 @@ function Invoke-SelfDelete {
 
         [Parameter(Mandatory = $false)]
         [string]$ContextPath
+
+        [Parameter(Mandatory = $false)]
+        [string]$mapPath
     )
 
     if ($NoSelfDelete) { return }
@@ -811,6 +814,10 @@ function Invoke-SelfDelete {
 
     if (-not [string]::IsNullOrWhiteSpace($ContextPath) -and (Test-Path -LiteralPath $ContextPath)) {
         $targets += $ContextPath
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($mapPath) -and (Test-Path -LiteralPath $mapPath)) {
+        $targets += $mapPath
     }
 
     if ($targets.Count -eq 0) { return }
@@ -829,13 +836,13 @@ function Invoke-SelfDelete {
 
 $scriptPath = $MyInvocation.MyCommand.Path
 $ContextPath = $MyInvocation.MyCommand.Path
+$mapPath = $MyInvocation.MyCommand.Path
+
+# Tracking outputs for context file
 $script:SecureScorePercent    = $null
 $script:SecureScorePoints     = $null
 $script:SecureScoreMaxScore   = $null
 $script:SecureScoreCreatedDate= $null
-
-
-# Tracking outputs for context file
 $script:SecureScoreChartPath = $null
 $script:SecureScoreSummaryCsvPath = $null
 $script:LicenseReviewCsvPath = $null
