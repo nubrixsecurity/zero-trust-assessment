@@ -789,21 +789,37 @@ try {
     
             $ctxPath = Join-Path $export.AssessmentFolder "ExecutiveSummary.Context.json"
     
+            # IMPORTANT:
+            # Your invoke-zta-execsummary.ps1 expects:
+            #   - ctx.ActionableCsv
+            #   - ctx.AssessmentFolder
+            #   - ctx.TenantId
+            # and (optionally)
+            #   - ctx.SecureScoreImage
+            #
+            # So we write those exact keys.
+    
             $ctx = @{
-                TenantId                   = $TenantId
-                SubscriptionId             = $SubscriptionId
-                CustomerName               = $CustomerName
-                PreparedBy                 = $PreparedBy
-                OutputPath                 = $OutputPath
-                AssessmentFolder           = $export.AssessmentFolder
-                ActionableCsvPath          = $export.ActionableCsv
+                TenantId         = $TenantId
+                SubscriptionId   = $SubscriptionId
     
-                SecureScoreChartPath       = $script:SecureScoreChartPath
-                SecureScoreSummaryCsvPath  = $script:SecureScoreSummaryCsvPath
+                CustomerName     = $CustomerName
+                PreparedBy       = $PreparedBy
+                RunDate          = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     
-                LicenseReviewCsvPath       = $script:LicenseReviewCsvPath
+                OutputPath       = $OutputPath
+                AssessmentFolder = $export.AssessmentFolder
     
-                CreatedUtc                 = (Get-Date).ToUniversalTime().ToString("o")
+                # REQUIRED for exec summary script:
+                ActionableCsv    = $export.ActionableCsv
+    
+                # OPTIONAL for exec summary script (image insertion):
+                SecureScoreImage = $script:SecureScoreChartPath
+    
+                # Extra fields are fine (exec summary ignores unknown keys):
+                SecureScoreSummaryCsvPath = $script:SecureScoreSummaryCsvPath
+                LicenseReviewCsvPath      = $script:LicenseReviewCsvPath
+                CreatedUtc                = (Get-Date).ToUniversalTime().ToString("o")
             }
     
             $null = Write-ExecSummaryContextFile -ContextPath $ctxPath -Context $ctx
@@ -814,14 +830,16 @@ try {
                 $execSummaryUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/invoke-zta-execsummary.ps1"
                 $execScript = Get-ExecSummaryScriptFromTempOrDownload -ScriptUrl $execSummaryUrl
     
-                if ($execScript) {
+                if ($execScript -and (Test-Path -LiteralPath $execScript)) {
                     $ok = Invoke-ExecSummaryScript -ScriptPath $execScript -ContextPath $ctxPath
                     if ($ok) {
                         Write-Host "[INFO] Exec Summary completed."
-                    } else {
+                    }
+                    else {
                         Write-Host "[WARN] Exec Summary did not complete successfully."
                     }
-                } else {
+                }
+                else {
                     Write-Host "[WARN] Exec Summary script could not be downloaded."
                 }
             }
@@ -832,49 +850,6 @@ try {
     }
     catch {
         Write-Host "[WARN] Failed to write context file / run Exec Summary: $($_.Exception.Message)"
-    }
-        
-    # OPTIONAL: run Exec Summary generator (separate script) if requested
-    if ($ExecSummary) {
-    
-        # Only run if we successfully wrote the context file
-        if (-not $ctxPath -or -not (Test-Path -LiteralPath $ctxPath)) {
-            Write-Host "[WARN] Exec Summary requested, but context file not found. Skipping."
-        }
-        else {
-            $execSummaryUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/invoke-zta-execsummary.ps1"
-            $execScript = Get-ExecSummaryScriptFromTempOrDownload -ScriptUrl $execSummaryUrl
-    
-            if (-not $execScript -or -not (Test-Path -LiteralPath $execScript)) {
-                Write-Host "[WARN] Exec Summary script could not be downloaded. Skipping."
-            }
-            else {
-                Write-Host "[INFO] Exec Summary script resolved to: $execScript"
-                Write-Host "[INFO] Exec Summary context path: $ctxPath"
-    
-                # IMPORTANT: don't rely on the downloaded script being in PATH; call pwsh explicitly
-                try {
-                    $args = @(
-                        "-NoProfile",
-                        "-ExecutionPolicy", "Bypass",
-                        "-File", $execScript,
-                        "-ContextPath", $ctxPath
-                    )
-    
-                    $p = Start-Process -FilePath "pwsh" -ArgumentList $args -Wait -PassThru -NoNewWindow
-    
-                    if ($p.ExitCode -eq 0) {
-                        Write-Host "[INFO] Exec Summary completed."
-                    }
-                    else {
-                        Write-Host "[WARN] Exec Summary returned exit code: $($p.ExitCode)"
-                    }
-                }
-                catch {
-                    Write-Host "[WARN] Exec Summary failed to launch: $($_.Exception.Message)"
-                }
-            }
-        }
     }
 
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
