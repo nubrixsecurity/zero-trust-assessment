@@ -541,7 +541,7 @@ function Export-ZtaActionableCsv {
             MinimumLicense     = $t.TestMinimumLicense
             ImplementationCost = $t.TestImplementationCost
             RemediationActions = $rem
-            Result             = $t.TestResult
+            #Result             = $t.TestResult
             RemediationLinks   = $linkLookup["$($t.TestId)"]
         }
     }
