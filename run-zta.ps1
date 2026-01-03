@@ -678,9 +678,44 @@ function Invoke-ExecSummaryScript {
     Write-Host "[INFO] Running Exec Summary (pwsh) -> $ScriptPath"
     Write-Host "[INFO] Using context -> $ContextPath"
 
-    $p = Start-Process -FilePath $pwsh -ArgumentList $args -Wait -PassThru
+    # Capture output to temp logs so we can see WHY it exited 1
+    $stdoutPath = Join-Path $env:TEMP "zta-execsummary-stdout.log"
+    $stderrPath = Join-Path $env:TEMP "zta-execsummary-stderr.log"
+
+    try {
+        if (Test-Path $stdoutPath) { Remove-Item $stdoutPath -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $stderrPath) { Remove-Item $stderrPath -Force -ErrorAction SilentlyContinue }
+    } catch {}
+
+    $p = Start-Process -FilePath $pwsh `
+        -ArgumentList $args `
+        -Wait -PassThru `
+        -NoNewWindow `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError  $stderrPath
+
+    # Print captured output to console (so you can paste it here)
+    try {
+        if (Test-Path $stdoutPath) {
+            $out = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace($out)) {
+                Write-Host "[INFO] Exec Summary output:"
+                Write-Host $out
+            }
+        }
+        if (Test-Path $stderrPath) {
+            $err = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace($err)) {
+                Write-Host "[WARN] Exec Summary error output:"
+                Write-Host $err
+            }
+        }
+    } catch {}
+
     if ($p.ExitCode -ne 0) {
         Write-Host "[WARN] Exec Summary script exited with code: $($p.ExitCode)"
+        Write-Host "[WARN] Stdout log: $stdoutPath"
+        Write-Host "[WARN] Stderr log: $stderrPath"
         return $false
     }
 
