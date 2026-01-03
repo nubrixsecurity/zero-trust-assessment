@@ -800,30 +800,22 @@ function Invoke-SelfDelete {
         [string]$ContextPath,
 
         [Parameter(Mandatory = $false)]
-        [string]$mapPath
+        [string]$MapPath
     )
 
     if ($NoSelfDelete) { return }
 
-    # Build list of files we want to delete (only those that exist)
     $targets = @()
 
-    if (-not [string]::IsNullOrWhiteSpace($ScriptPath) -and (Test-Path -LiteralPath $ScriptPath)) {
-        $targets += $ScriptPath
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($ContextPath) -and (Test-Path -LiteralPath $ContextPath)) {
-        $targets += $ContextPath
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($mapPath) -and (Test-Path -LiteralPath $mapPath)) {
-        $targets += $mapPath
+    foreach ($p in @($ScriptPath, $ContextPath, $MapPath)) {
+        if (-not [string]::IsNullOrWhiteSpace($p) -and (Test-Path -LiteralPath $p)) {
+            $targets += $p
+        }
     }
 
     if ($targets.Count -eq 0) { return }
 
     try {
-        # One cmd call deletes all targets after a short delay
         $quoted = ($targets | ForEach-Object { '"' + $_ + '"' }) -join ' '
         $cmd = "/c ping 127.0.0.1 -n 3 > nul & del /f /q $quoted"
         Start-Process -FilePath "cmd.exe" -ArgumentList $cmd -WindowStyle Hidden | Out-Null
@@ -835,8 +827,6 @@ function Invoke-SelfDelete {
 #endregion Self-delete
 
 $scriptPath = $MyInvocation.MyCommand.Path
-$ContextPath = $MyInvocation.MyCommand.Path
-$mapPath = $MyInvocation.MyCommand.Path
 
 # Tracking outputs for context file
 $script:SecureScorePercent    = $null
@@ -1031,7 +1021,7 @@ finally {
     $null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
     $null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
-    Invoke-SelfDelete -ScriptPath $scriptPath -ContextPath $ctxPath
+    Invoke-SelfDelete -ScriptPath $scriptPath -ContextPath $ctxPath -MapPath $mapPath
 
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
