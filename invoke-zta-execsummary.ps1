@@ -579,7 +579,6 @@ try {
         throw "Context file not found: $ContextPath"
     }
 
-    Write-Host "[INFO] Reading context: $ContextPath"
     $ctxRaw = Get-Content -Path $ContextPath -Raw -Encoding UTF8
     $ctx = $ctxRaw | ConvertFrom-Json
 
@@ -589,12 +588,12 @@ try {
     $actionableCsv = $null
     if ($ctx.ActionableCsvPath) { $actionableCsv = [string]$ctx.ActionableCsvPath }
     elseif ($ctx.ActionableCsv) { $actionableCsv = [string]$ctx.ActionableCsv }
-    
+
     if ([string]::IsNullOrWhiteSpace($actionableCsv)) { throw "Context missing: ActionableCsvPath/ActionableCsv" }
     if (-not (Test-Path -LiteralPath $actionableCsv)) { throw "Actionable CSV not found: $actionableCsv" }
-    
+
     if (-not $ctx.TenantId) { throw "Context missing: TenantId" }
-    
+
     # Normalize into the object your generator expects
     $ctx | Add-Member -NotePropertyName ActionableCsv -NotePropertyValue $actionableCsv -Force
 
@@ -606,28 +605,29 @@ try {
         throw "Executive Summary template not found. Expected filename: ZeroTrustAssessment_ExecutiveSummary_Template.docx (or provide -TemplatePath)."
     }
 
-    Write-Host "[INFO] Template resolved to: $resolvedTemplate"
-    Write-Host "[INFO] Output DOCX: $outDoc"
-
     $created = New-ZtaExecutiveSummaryDoc_FromContext -Ctx $ctx -TemplateFullPath $resolvedTemplate -OutDocPath $outDoc
     Write-Host "[DONE] Executive Summary saved to: $created"
 }
 catch {
-    # Rich error output (line number + stack) so parent can show it
-    Write-Host "[ERROR] Exec Summary failed."
-    Write-Host ("[ERROR] Message: {0}" -f $_.Exception.Message)
-
-    if ($_.Exception.InnerException) {
-        Write-Host ("[ERROR] Inner: {0}" -f $_.Exception.InnerException.Message)
-    }
+    # Minimal by default; richer only when -Verbose is used
+    Write-Host "[ERROR] Exec Summary failed: $($_.Exception.Message)"
 
     if ($_.InvocationInfo) {
         Write-Host ("[ERROR] At: {0}:{1}" -f $_.InvocationInfo.ScriptName, $_.InvocationInfo.ScriptLineNumber)
-        Write-Host ("[ERROR] Line: {0}" -f $_.InvocationInfo.Line)
     }
 
-    Write-Host "[ERROR] Stack:"
-    Write-Host $_.ScriptStackTrace
+    if ($PSBoundParameters.ContainsKey('Verbose') -and $VerbosePreference -ne 'SilentlyContinue') {
+        if ($_.Exception.InnerException) {
+            Write-Host ("[ERROR] Inner: {0}" -f $_.Exception.InnerException.Message)
+        }
+
+        if ($_.InvocationInfo) {
+            Write-Host ("[ERROR] Line: {0}" -f $_.InvocationInfo.Line)
+        }
+
+        Write-Host "[ERROR] Stack:"
+        Write-Host $_.ScriptStackTrace
+    }
 
     exit 1
 }
