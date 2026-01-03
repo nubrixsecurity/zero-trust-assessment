@@ -473,11 +473,29 @@ function New-ZtaExecutiveSummaryDoc_FromContext {
     $roadmap90_180 = Get-RoadmapText -Rows $norm -Window '90_180'
     $workshopCta   = Get-WorkshopCtaText
 
-    $secureScoreSummaryText = @(
-        "Secure Score Summary:",
-        "The Secure Score trend chart is included below.",
-        "Recommended next steps: address high-impact gaps first (especially identity and admin protections), and establish a monthly posture review cadence."
-    ) -join "`r`n"
+    $scorePercent = $null
+    $points       = $null
+    $maxScore     = $null
+    
+    if ($Ctx.SecureScorePercent -ne $null)  { $scorePercent = [double]$Ctx.SecureScorePercent }
+    if ($Ctx.SecureScorePoints  -ne $null)  { $points       = [double]$Ctx.SecureScorePoints }
+    if ($Ctx.SecureScoreMaxScore -ne $null) { $maxScore     = [double]$Ctx.SecureScoreMaxScore }
+    
+    if ($scorePercent -ne $null -and $points -ne $null -and $maxScore -ne $null) {
+        $secureScoreSummaryText = @(
+            ("The Secure Score stands at {0}%, with {1} out of {2} points achieved." -f $scorePercent, $points, $maxScore),
+            "The Secure Score trend chart is included below.",
+            "Recommended next steps: address high-impact gaps first (especially identity and admin protections), and establish a monthly posture review cadence."
+        ) -join "`r`n"
+    }
+    else {
+        # fallback if values weren't present
+        $secureScoreSummaryText = @(
+            "Secure Score Summary:",
+            "The Secure Score trend chart is included below.",
+            "Recommended next steps: address high-impact gaps first (especially identity and admin protections), and establish a monthly posture review cadence."
+        ) -join "`r`n"
+    }
 
     $secureScoreImage = $null
 
