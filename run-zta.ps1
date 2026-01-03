@@ -98,6 +98,10 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $base "$date\run-$time"
 }
 New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+
+# Nubrix temp working folder (safe to delete as a unit)
+$script:NubrixTempRoot = Join-Path $env:TEMP "nubrix-zta"
+New-Item -Path $script:NubrixTempRoot -ItemType Directory -Force | Out-Null
 #endregion Output path
 
 #region Ensure module installed (install only if missing)
@@ -243,6 +247,7 @@ function Invoke-LicenseReview {
 
     $mapFileName = "Product names and service plan identifiers for licensing.csv"
     $mapPath = Join-Path $licenseFolder $mapFileName
+    $script:LicenseMapPath = $mapPath
     if (-not (Test-Path -LiteralPath $mapPath)) {
         Invoke-WebRequest -Uri $LicenseMapUrl -OutFile $mapPath -ErrorAction Stop
     }
@@ -682,12 +687,10 @@ function Convert-GitHubUrlToRaw {
 
 function Get-ExecSummaryScriptFromTempOrDownload {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$ScriptUrl
-    )
+    param([Parameter(Mandatory)][string]$ScriptUrl)
 
     $fileName = "invoke-zta-execsummary.ps1"
-    $tempPath = Join-Path $env:TEMP $fileName
+    $tempPath = Join-Path $script:NubrixTempRoot $fileName
 
     if (Test-Path -LiteralPath $tempPath) { return $tempPath }
 
@@ -732,8 +735,8 @@ function Invoke-ExecSummaryScript {
     }
 
     # Logs: keep ONLY if failure
-    $stdoutLog = Join-Path $env:TEMP "zta-execsummary-stdout.log"
-    $stderrLog = Join-Path $env:TEMP "zta-execsummary-stderr.log"
+    $stdoutLog = Join-Path $script:NubrixTempRoot "zta-execsummary-stdout.log"
+    $stderrLog = Join-Path $script:NubrixTempRoot "zta-execsummary-stderr.log"
 
     # Overwrite old logs each run (so failure logs are current)
     foreach ($p in @($stdoutLog, $stderrLog)) {
@@ -794,39 +797,39 @@ function Invoke-SelfDelete {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $false)]
-        [string]$ScriptPath,
-
-        [Parameter(Mandatory = $false)]
-        [string]$ContextPath,
-
-        [Parameter(Mandatory = $false)]
-        [string]$MapPath
+        [string[]]$Paths
     )
 
     if ($NoSelfDelete) { return }
 
-    # Collect non-empty targets (don't require them to exist yet; we'll test at deletion time)
     $targets = @()
-    foreach ($p in @($ScriptPath, $ContextPath, $MapPath)) {
+    foreach ($p in $Paths) {
         if (-not [string]::IsNullOrWhiteSpace($p)) { $targets += $p }
     }
-
     if ($targets.Count -eq 0) { return }
 
     try {
-        # Use Windows PowerShell for maximum compatibility
         $psExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
 
-        $command = "Start-Sleep -Seconds 3; foreach(`$p in `$args) { if([string]::IsNullOrWhiteSpace(`$p)) { continue }; for(`$i=0; `$i -lt 10; `$i++) { try { if(Test-Path -LiteralPath `$p) { Remove-Item -LiteralPath `$p -Force -ErrorAction Stop }; break } catch { Start-Sleep -Milliseconds 500 } } }"
-        
-        $argList = @(
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-Command", $command
-        ) + $targets
-        
-        Start-Process -FilePath $psExe -ArgumentList $argList -WindowStyle Hidden | Out-Null
+        $cmd = @()
+        $cmd += 'Start-Sleep -Seconds 3'
+        $cmd += 'foreach ($p in $args) {'
+        $cmd += '  if ([string]::IsNullOrWhiteSpace($p)) { continue }'
+        $cmd += '  for ($i=0; $i -lt 20; $i++) {'
+        $cmd += '    try {'
+        $cmd += '      if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop }'
+        $cmd += '      break'
+        $cmd += '    } catch { Start-Sleep -Milliseconds 500 }'
+        $cmd += '  }'
+        $cmd += '}'
 
+        $scriptText = ($cmd -join '; ')
+        $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptText))
+
+        $argLine = "/c ping 127.0.0.1 -n 3 > nul & `"$psExe`" -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc --% " +
+                   (($targets | ForEach-Object { '"' + $_ + '"' }) -join ' ')
+
+        Start-Process -FilePath "cmd.exe" -ArgumentList $argLine -WindowStyle Hidden | Out-Null
     }
     catch {
         # best-effort
@@ -834,17 +837,20 @@ function Invoke-SelfDelete {
 }
 #endregion Self-delete
 
-
 $scriptPath = $MyInvocation.MyCommand.Path
 
 # Tracking outputs for context file
-$script:SecureScorePercent    = $null
-$script:SecureScorePoints     = $null
-$script:SecureScoreMaxScore   = $null
-$script:SecureScoreCreatedDate= $null
-$script:SecureScoreChartPath = $null
+$script:SecureScorePercent        = $null
+$script:SecureScorePoints         = $null
+$script:SecureScoreMaxScore       = $null
+$script:SecureScoreCreatedDate    = $null
+$script:SecureScoreChartPath      = $null
 $script:SecureScoreSummaryCsvPath = $null
-$script:LicenseReviewCsvPath = $null
+$script:LicenseReviewCsvPath      = $null
+$script:ExecSummaryContextPath    = $null
+$script:LicenseMapPath            = $null
+$script:NubrixTempRoot            = $null
+
 
 try {
     Ensure-ModuleInstalled -Name "ZeroTrustAssessment" -Update:$UpdateModules
@@ -933,6 +939,7 @@ try {
         if ($export -and $export.AssessmentFolder -and $export.ActionableCsv -and (Test-Path -LiteralPath $export.ActionableCsv)) {
     
             $ctxPath = Join-Path $export.AssessmentFolder "ExecutiveSummary.Context.json"
+            $script:ExecSummaryContextPath = $ctxPath
     
             # Resolve CustomerName:
             # - Prefer explicit -CustomerName if provided
@@ -1026,18 +1033,34 @@ catch {
     throw
 }
 finally {
-    $null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
-    $null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
-    $null = Disconnect-MgGraph -ErrorAction SilentlyContinue
+    #$null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
+    #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
+    #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
-    Invoke-SelfDelete -ScriptPath $scriptPath -ContextPath $ctxPath -MapPath $mapPath
+    # If you're self-deleting, do NOT pause. Let the process exit so deletion can succeed.
+    if ($NoSelfDelete) {
+        Write-Host ""
+        Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
+        [void][System.Console]::ReadKey($true)
+        Write-Host ""
+    }
+
+    $deleteTargets = @(
+        $scriptPath,
+        $script:ExecSummaryContextPath,
+        $script:LicenseMapPath,
+        $script:NubrixTempRoot
+    )
+
+    Invoke-SelfDelete -Paths $deleteTargets
 
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
     }
 
-    Write-Host ""
-    Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
-    [void][System.Console]::ReadKey($true)
-    Write-Host ""
+    if (-not $NoSelfDelete) {
+        Write-Host ""
+        Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
+        Write-Host ""
+    }
 }
