@@ -584,6 +584,62 @@ function Export-ZtaActionableCsv {
 }
 #endregion ZTA export
 
+#region Customer Name resolver (Graph org displayName; no module installs)
+function Resolve-CustomerName {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)][string]$CustomerName,
+        [Parameter(Mandatory = $false)][string]$TenantId
+    )
+
+    # If caller supplied a name, trust it
+    if (-not [string]::IsNullOrWhiteSpace($CustomerName)) {
+        return $CustomerName.Trim()
+    }
+
+    try {
+        # Ensure we have a Graph context with org-read scope (best-effort; no installs)
+        $ctx = $null
+        try { $ctx = Get-MgContext } catch { $ctx = $null }
+
+        $hasOrgScope = $false
+        if ($ctx -and $ctx.Scopes) {
+            if ($ctx.Scopes -contains "Organization.Read.All" -or $ctx.Scopes -contains "Directory.Read.All") {
+                $hasOrgScope = $true
+            }
+        }
+
+        if (-not $hasOrgScope) {
+            # Best-effort connect (won't prompt if already connected in many cases; will prompt if not)
+            try { Connect-MgGraph -Scopes @("Organization.Read.All") -NoWelcome -ErrorAction Stop | Out-Null } catch {}
+        }
+
+        # Preferred: cmdlet (if available)
+        if (Get-Command Get-MgOrganization -ErrorAction SilentlyContinue) {
+            $org = Get-MgOrganization -Property DisplayName -ErrorAction Stop | Select-Object -First 1
+            if ($org -and -not [string]::IsNullOrWhiteSpace($org.DisplayName)) {
+                return $org.DisplayName.Trim()
+            }
+        }
+
+        # Fallback: raw request (works even if cmdlet isn't present)
+        $resp = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/organization?`$select=displayName" -OutputType PSObject -ErrorAction Stop
+        $dn = $resp.value | Select-Object -First 1 -ExpandProperty displayName -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($dn)) {
+            return $dn.Trim()
+        }
+    }
+    catch {
+        # best-effort only
+    }
+
+    # Optional fallback: use tenantId if you prefer not-blank
+    # if (-not [string]::IsNullOrWhiteSpace($TenantId)) { return $TenantId }
+
+    return ""
+}
+#endregion Customer Name resolver
+
 #region Exec Summary context writer (writes JSON to Assessment Report)
 function Write-ExecSummaryContextFile {
     [CmdletBinding()]
@@ -728,13 +784,34 @@ function Invoke-ExecSummaryScript {
 
 #region Self-delete (best-effort)
 function Invoke-SelfDelete {
-    param([Parameter(Mandatory = $true)][string]$ScriptPath)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$ScriptPath,
+
+        [Parameter(Mandatory = $false)]
+        [string]$ContextPath
+    )
 
     if ($NoSelfDelete) { return }
-    if ([string]::IsNullOrWhiteSpace($ScriptPath) -or -not (Test-Path -LiteralPath $ScriptPath)) { return }
+
+    # Build list of files we want to delete (only those that exist)
+    $targets = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($ScriptPath) -and (Test-Path -LiteralPath $ScriptPath)) {
+        $targets += $ScriptPath
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ContextPath) -and (Test-Path -LiteralPath $ContextPath)) {
+        $targets += $ContextPath
+    }
+
+    if ($targets.Count -eq 0) { return }
 
     try {
-        $cmd = "/c ping 127.0.0.1 -n 3 > nul & del /f /q `"$ScriptPath`""
+        # One cmd call deletes all targets after a short delay
+        $quoted = ($targets | ForEach-Object { '"' + $_ + '"' }) -join ' '
+        $cmd = "/c ping 127.0.0.1 -n 3 > nul & del /f /q $quoted"
         Start-Process -FilePath "cmd.exe" -ArgumentList $cmd -WindowStyle Hidden | Out-Null
     }
     catch {
@@ -744,6 +821,7 @@ function Invoke-SelfDelete {
 #endregion Self-delete
 
 $scriptPath = $MyInvocation.MyCommand.Path
+$ContextPath = $MyInvocation.MyCommand.Path
 
 # Tracking outputs for context file
 $script:SecureScoreChartPath = $null
@@ -827,10 +905,49 @@ try {
     
             $ctxPath = Join-Path $export.AssessmentFolder "ExecutiveSummary.Context.json"
     
+            # Resolve CustomerName:
+            # - Use provided -CustomerName if present
+            # - Else pull tenant displayName from Graph (best-effort; no module installs)
+            $resolvedCustomerName = $CustomerName
+            if ([string]::IsNullOrWhiteSpace($resolvedCustomerName)) {
+                try {
+                    $ctxMg = $null
+                    try { $ctxMg = Get-MgContext } catch { $ctxMg = $null }
+    
+                    $hasOrgScope = $false
+                    if ($ctxMg -and $ctxMg.Scopes) {
+                        if ($ctxMg.Scopes -contains "Organization.Read.All" -or $ctxMg.Scopes -contains "Directory.Read.All") {
+                            $hasOrgScope = $true
+                        }
+                    }
+    
+                    if (-not $hasOrgScope) {
+                        try { Connect-MgGraph -Scopes @("Organization.Read.All") -NoWelcome -ErrorAction Stop | Out-Null } catch {}
+                    }
+    
+                    if (Get-Command Get-MgOrganization -ErrorAction SilentlyContinue) {
+                        $org = Get-MgOrganization -Property DisplayName -ErrorAction Stop | Select-Object -First 1
+                        if ($org -and -not [string]::IsNullOrWhiteSpace($org.DisplayName)) {
+                            $resolvedCustomerName = $org.DisplayName
+                        }
+                    }
+                    else {
+                        $resp = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/organization?`$select=displayName" -OutputType PSObject -ErrorAction Stop
+                        $dn = $resp.value | Select-Object -First 1 -ExpandProperty displayName -ErrorAction SilentlyContinue
+                        if (-not [string]::IsNullOrWhiteSpace($dn)) {
+                            $resolvedCustomerName = $dn
+                        }
+                    }
+                }
+                catch {
+                    # best-effort only; leave empty if we can't resolve
+                }
+            }
+    
             $ctx = @{
                 TenantId                  = $TenantId
                 SubscriptionId            = $SubscriptionId
-                CustomerName              = $CustomerName
+                CustomerName              = ([string]$resolvedCustomerName).Trim()
                 PreparedBy                = $PreparedBy
                 OutputPath                = $OutputPath
                 AssessmentFolder          = $export.AssessmentFolder
@@ -871,6 +988,7 @@ try {
         Write-Host "[WARN] Failed to write context file / run Exec Summary: $($_.Exception.Message)"
     }
 
+
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
 }
 catch {
@@ -883,7 +1001,7 @@ finally {
     #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
     #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
-    Invoke-SelfDelete -ScriptPath $scriptPath
+    Invoke-SelfDelete -ScriptPath $scriptPath -ContextPath $ctxPath
 
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
