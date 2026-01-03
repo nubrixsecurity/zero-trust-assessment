@@ -92,7 +92,7 @@ param(
 
 #region Output path (Documents + date + timestamp)
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $base = Join-Path $env:USERPROFILE "Documents\ZeroTrustAssessment"
+    $base = Join-Path $env:USERPROFILE "Documents\Zero-Trust-Assessment"
     $date = (Get-Date).ToString("yyyy-MM-dd")
     $time = (Get-Date).ToString("HHmmss")
     $OutputPath = Join-Path $base "$date\run-$time"
