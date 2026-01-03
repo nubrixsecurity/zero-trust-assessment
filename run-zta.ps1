@@ -927,6 +927,44 @@ try {
         if ($export -and $export.AssessmentFolder -and $export.ActionableCsv -and (Test-Path -LiteralPath $export.ActionableCsv)) {
     
             $ctxPath = Join-Path $export.AssessmentFolder "ExecutiveSummary.Context.json"
+
+            # Resolve CustomerName:
+            # - Prefer explicit -CustomerName if provided
+            # - Otherwise, pull tenant displayName from Graph (we assume ZTA connection already loaded MgGraph auth)
+            $resolvedCustomerName = $null
+    
+            if (-not [string]::IsNullOrWhiteSpace($CustomerName)) {
+                $resolvedCustomerName = $CustomerName.Trim()
+            }
+            else {
+                try {
+                    # Prefer Get-MgOrganization if available
+                    if (Get-Command Get-MgOrganization -ErrorAction SilentlyContinue) {
+                        $org = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
+                        if ($org -and -not [string]::IsNullOrWhiteSpace($org.DisplayName)) {
+                            $resolvedCustomerName = $org.DisplayName.Trim()
+                        }
+                    }
+                    else {
+                        # Fallback: Invoke-MgGraphRequest directly
+                        if (Get-Command Invoke-MgGraphRequest -ErrorAction SilentlyContinue) {
+                            $resp = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/organization?`$select=displayName" -OutputType PSObject -ErrorAction Stop
+                            $dn = $resp.value | Select-Object -First 1 -ExpandProperty displayName
+                            if (-not [string]::IsNullOrWhiteSpace($dn)) {
+                                $resolvedCustomerName = $dn.Trim()
+                            }
+                        }
+                    }
+                }
+                catch {
+                    # best-effort only
+                    $resolvedCustomerName = $null
+                }
+            }
+    
+            if ([string]::IsNullOrWhiteSpace($resolvedCustomerName)) {
+                $resolvedCustomerName = ""   # keep deterministic JSON
+            }
     
             $ctx = @{
                 TenantId                  = $TenantId
