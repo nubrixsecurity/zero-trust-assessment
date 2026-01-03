@@ -1,7 +1,7 @@
 <#
     FLAGS:
-    -LicenseReview
-    -SecureScore
+    -SkipSecureScore (optional)
+    -SkipLicenseReview (optional)
     -KeepZtExport   (optional; keeps the zt-export folder instead of deleting it)
     -OpenOutput     (optional; opens OutputPath at end)
 #>
@@ -14,4 +14,4 @@ $p = Join-Path $env:TEMP "run-zta.ps1"
 
 Invoke-WebRequest -Uri $u -OutFile $p
 
-pwsh -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId -LicenseReview -SecureScore -OpenOutput
+pwsh -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId -OpenOutput
