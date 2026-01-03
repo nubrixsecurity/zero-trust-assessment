@@ -805,26 +805,53 @@ function Invoke-SelfDelete {
 
     if ($NoSelfDelete) { return }
 
+    # Collect non-empty targets (don't require them to exist yet; we'll test at deletion time)
     $targets = @()
-
     foreach ($p in @($ScriptPath, $ContextPath, $MapPath)) {
-        if (-not [string]::IsNullOrWhiteSpace($p) -and (Test-Path -LiteralPath $p)) {
-            $targets += $p
-        }
+        if (-not [string]::IsNullOrWhiteSpace($p)) { $targets += $p }
     }
 
     if ($targets.Count -eq 0) { return }
 
     try {
-        $quoted = ($targets | ForEach-Object { '"' + $_ + '"' }) -join ' '
-        $cmd = "/c ping 127.0.0.1 -n 3 > nul & del /f /q $quoted"
-        Start-Process -FilePath "cmd.exe" -ArgumentList $cmd -WindowStyle Hidden | Out-Null
+        # Use Windows PowerShell for maximum compatibility
+        $psExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+
+        $command = @'
+            Start-Sleep -Seconds 3
+            
+            foreach ($p in $args) {
+                if ([string]::IsNullOrWhiteSpace($p)) { continue }
+            
+                # Retry a few times in case the file is briefly locked
+                for ($i = 0; $i -lt 10; $i++) {
+                    try {
+                        if (Test-Path -LiteralPath $p) {
+                            Remove-Item -LiteralPath $p -Force -ErrorAction Stop
+                        }
+                        break
+                    }
+                    catch {
+                        Start-Sleep -Milliseconds 500
+                    }
+                }
+            }
+            '@
+
+        $argList = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-Command", $command
+        ) + $targets
+
+        Start-Process -FilePath $psExe -ArgumentList $argList -WindowStyle Hidden | Out-Null
     }
     catch {
         # best-effort
     }
 }
 #endregion Self-delete
+
 
 $scriptPath = $MyInvocation.MyCommand.Path
 
