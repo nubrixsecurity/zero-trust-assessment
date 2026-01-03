@@ -675,12 +675,15 @@ function Invoke-ExecSummaryScript {
         "-ContextPath", $ContextPath
     )
 
-    Write-Host "[INFO] Running Exec Summary script: $ScriptPath"
-    $p = Start-Process -FilePath $pwsh -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+    Write-Host "[INFO] Running Exec Summary (pwsh) -> $ScriptPath"
+    Write-Host "[INFO] Using context -> $ContextPath"
+
+    $p = Start-Process -FilePath $pwsh -ArgumentList $args -Wait -PassThru
     if ($p.ExitCode -ne 0) {
         Write-Host "[WARN] Exec Summary script exited with code: $($p.ExitCode)"
         return $false
     }
+
     return $true
 }
 #endregion Exec Summary runner helpers
