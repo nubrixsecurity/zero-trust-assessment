@@ -76,6 +76,9 @@ param(
     [Parameter(Mandatory = $false)]
     [switch]$KeepZtExport,
 
+    [Parameter(Mandatory = $false)]
+    [switch]$ExecSummary,
+
     # Optional metadata for reporting/context
     [Parameter(Mandatory = $false)]
     [string]$CustomerName,
@@ -599,6 +602,89 @@ function Write-ExecSummaryContextFile {
 }
 #endregion Exec Summary context writer
 
+#region Exec Summary runner helpers (download + run)
+function Convert-GitHubUrlToRaw {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Url)
+
+    if ($Url -match '^https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.*)$') {
+        $org    = $Matches[1]
+        $repo   = $Matches[2]
+        $branch = $Matches[3]
+        $path   = $Matches[4]
+        return "https://raw.githubusercontent.com/$org/$repo/$branch/$path"
+    }
+    return $Url
+}
+
+function Get-ExecSummaryScriptFromTempOrDownload {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ScriptUrl
+    )
+
+    $fileName = "invoke-zta-execsummary.ps1"
+    $tempPath = Join-Path $env:TEMP $fileName
+
+    if (Test-Path -LiteralPath $tempPath) { return $tempPath }
+
+    $rawUrl = Convert-GitHubUrlToRaw -Url $ScriptUrl
+
+    $oldPP = $ProgressPreference
+    try {
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $rawUrl -OutFile $tempPath -ErrorAction Stop
+        try { Unblock-File -LiteralPath $tempPath -ErrorAction SilentlyContinue } catch {}
+        return $tempPath
+    }
+    catch {
+        Write-Host "[WARN] Failed to download Exec Summary script: $($_.Exception.Message)"
+        return $null
+    }
+    finally {
+        $ProgressPreference = $oldPP
+    }
+}
+
+function Invoke-ExecSummaryScript {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ScriptPath,
+        [Parameter(Mandatory)][string]$ContextPath
+    )
+
+    if (-not (Test-Path -LiteralPath $ScriptPath)) {
+        Write-Host "[WARN] Exec Summary script not found: $ScriptPath"
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $ContextPath)) {
+        Write-Host "[WARN] Exec Summary context file not found: $ContextPath"
+        return $false
+    }
+
+    $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+    if (-not $pwsh) {
+        Write-Host "[WARN] pwsh not found. Exec Summary requires PowerShell 7."
+        return $false
+    }
+
+    $args = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $ScriptPath,
+        "-ContextPath", $ContextPath
+    )
+
+    Write-Host "[INFO] Running Exec Summary script: $ScriptPath"
+    $p = Start-Process -FilePath $pwsh -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+    if ($p.ExitCode -ne 0) {
+        Write-Host "[WARN] Exec Summary script exited with code: $($p.ExitCode)"
+        return $false
+    }
+    return $true
+}
+#endregion Exec Summary runner helpers
+
 #region Self-delete (best-effort)
 function Invoke-SelfDelete {
     param([Parameter(Mandatory = $true)][string]$ScriptPath)
@@ -697,9 +783,9 @@ try {
     # ALWAYS: write context file if Actionable CSV exists
     try {
         if ($export -and $export.AssessmentFolder -and $export.ActionableCsv -and (Test-Path -LiteralPath $export.ActionableCsv)) {
-
+    
             $ctxPath = Join-Path $export.AssessmentFolder "ExecutiveSummary.Context.json"
-
+    
             $ctx = @{
                 TenantId                   = $TenantId
                 SubscriptionId             = $SubscriptionId
@@ -708,24 +794,60 @@ try {
                 OutputPath                 = $OutputPath
                 AssessmentFolder           = $export.AssessmentFolder
                 ActionableCsvPath          = $export.ActionableCsv
-
+    
                 SecureScoreChartPath       = $script:SecureScoreChartPath
                 SecureScoreSummaryCsvPath  = $script:SecureScoreSummaryCsvPath
-
+    
                 LicenseReviewCsvPath       = $script:LicenseReviewCsvPath
-
+    
                 CreatedUtc                 = (Get-Date).ToUniversalTime().ToString("o")
             }
-
+    
             $null = Write-ExecSummaryContextFile -ContextPath $ctxPath -Context $ctx
+            Write-Host "[INFO] Exec Summary context written to: $ctxPath"
+    
+            # OPTIONAL: run Exec Summary generator (separate script) if requested
+            if ($ExecSummary) {
+                $execSummaryUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/invoke-zta-execsummary.ps1"
+                $execScript = Get-ExecSummaryScriptFromTempOrDownload -ScriptUrl $execSummaryUrl
+    
+                if ($execScript) {
+                    $ok = Invoke-ExecSummaryScript -ScriptPath $execScript -ContextPath $ctxPath
+                    if ($ok) {
+                        Write-Host "[INFO] Exec Summary completed."
+                    } else {
+                        Write-Host "[WARN] Exec Summary did not complete successfully."
+                    }
+                } else {
+                    Write-Host "[WARN] Exec Summary script could not be downloaded."
+                }
+            }
         }
         else {
             Write-Host "[WARN] Context file not written because Actionable CSV was not produced."
         }
     }
     catch {
-        Write-Host "[WARN] Failed to write context file: $($_.Exception.Message)"
+        Write-Host "[WARN] Failed to write context file / run Exec Summary: $($_.Exception.Message)"
     }
+        
+    # OPTIONAL: run Exec Summary generator (separate script) if requested
+    if ($ExecSummary) {
+        $execSummaryUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/invoke-zta-execsummary.ps1"
+        $execScript = Get-ExecSummaryScriptFromTempOrDownload -ScriptUrl $execSummaryUrl
+    
+        if ($execScript) {
+            $ok = Invoke-ExecSummaryScript -ScriptPath $execScript -ContextPath $ctxPath
+            if ($ok) {
+                Write-Host "[INFO] Exec Summary completed."
+            } else {
+                Write-Host "[WARN] Exec Summary did not complete successfully."
+            }
+        } else {
+            Write-Host "[WARN] Exec Summary script could not be downloaded."
+        }
+    }
+
 
     Write-Host "[INFO] Completed. Results saved to: $OutputPath"
 }
