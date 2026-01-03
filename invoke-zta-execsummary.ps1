@@ -363,10 +363,11 @@ function Add-TopRisksTable_IntoContentControl {
         $range.Collapse(0) # wdCollapseStart
 
         $rows = 11
-        $cols = 6
+        $cols = 5   # CHANGED: was 6
         $tbl = $Doc.Tables.Add($range, $rows, $cols)
         $tbl.Style = "Table Grid"
 
+        # Header row (CHANGED: removed Remediation Links column)
         $tbl.Cell(1,1).Range.Text = "TestId"
         $tbl.Cell(1,2).Range.Text = "Title"
         $tbl.Cell(1,3).Range.Text = "Pillar"
