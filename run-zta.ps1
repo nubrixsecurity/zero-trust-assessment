@@ -817,33 +817,16 @@ function Invoke-SelfDelete {
         # Use Windows PowerShell for maximum compatibility
         $psExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
 
-$command = @'
-Start-Sleep -Seconds 3
-
-foreach ($p in $args) {
-    if ([string]::IsNullOrWhiteSpace($p)) { continue }
-
-    for ($i = 0; $i -lt 10; $i++) {
-        try {
-            if (Test-Path -LiteralPath $p) {
-                Remove-Item -LiteralPath $p -Force -ErrorAction Stop
-            }
-            break
-        }
-        catch {
-            Start-Sleep -Milliseconds 500
-        }
-    }
-}
-'@
-
+        $command = "Start-Sleep -Seconds 3; foreach(`$p in `$args) { if([string]::IsNullOrWhiteSpace(`$p)) { continue }; for(`$i=0; `$i -lt 10; `$i++) { try { if(Test-Path -LiteralPath `$p) { Remove-Item -LiteralPath `$p -Force -ErrorAction Stop }; break } catch { Start-Sleep -Milliseconds 500 } } }"
+        
         $argList = @(
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
             "-Command", $command
         ) + $targets
-
+        
         Start-Process -FilePath $psExe -ArgumentList $argList -WindowStyle Hidden | Out-Null
+
     }
     catch {
         # best-effort
