@@ -6,6 +6,7 @@ MANDATORY FLAGS:
 -RunSasUrl      (SAS URL passed through to invoke-zta.ps1 so it can download run-zta.ps1)
 
 OPTIONAL FLAGS:
+-Partner
 -SkipExecSummary
 -SkipSecureScore
 -SkipLicenseReview
@@ -30,6 +31,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Documents\start-
   -SubscriptionId "<sub-guid>" `
   -InvokeSasUrl "<sas-url-for-invoke>" `
   -RunSasUrl "<sas-url-for-run>" `
+  -Partner `
   -OpenOutput
 #>
 
@@ -51,6 +53,8 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$RunSasUrl,
 
+    [switch]$Partner,
+
     [switch]$SkipExecSummary,
     [switch]$SkipSecureScore,
     [switch]$SkipLicenseReview,
@@ -59,7 +63,7 @@ param(
 )
 
 function Write-Err {
-    param([Parameter(Mandatory=$true)][string]$Message)
+    param([Parameter(Mandatory = $true)][string]$Message)
     Write-Host "[ERROR] $Message"
 }
 
@@ -88,15 +92,16 @@ $forward = @(
     "-SubscriptionId", $SubscriptionId
 )
 
-# Pass Run SAS URL to invoke layer (required for Blob-only invoke, but kept optional here for flexibility)
+# Pass Run SAS URL to invoke layer
 if (-not [string]::IsNullOrWhiteSpace($RunSasUrl)) {
     $forward += @("-RunSasUrl", $RunSasUrl)
 }
 
-if ($SkipExecSummary)   { $forward += "-SkipExecSummary" }
-if ($SkipSecureScore)   { $forward += "-SkipSecureScore" }
-if ($SkipLicenseReview) { $forward += "-SkipLicenseReview" }
-if ($KeepZtExport)      { $forward += "-KeepZtExport" }
-if ($OpenOutput)        { $forward += "-OpenOutput" }
+if ($Partner)          { $forward += "-Partner" }
+if ($SkipExecSummary)  { $forward += "-SkipExecSummary" }
+if ($SkipSecureScore)  { $forward += "-SkipSecureScore" }
+if ($SkipLicenseReview){ $forward += "-SkipLicenseReview" }
+if ($KeepZtExport)     { $forward += "-KeepZtExport" }
+if ($OpenOutput)       { $forward += "-OpenOutput" }
 
 pwsh -NoProfile -ExecutionPolicy Bypass -File $p @forward
