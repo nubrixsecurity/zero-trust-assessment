@@ -981,9 +981,9 @@ catch {
     throw
 }
 finally {
-    #$null = Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue
-    #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
-    #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
+    #try { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null } catch {}
+    #try { Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue | Out-Null } catch {}
+    #try { Clear-AzContext -Scope Process -ErrorAction SilentlyContinue | Out-Null } catch {}
 
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
