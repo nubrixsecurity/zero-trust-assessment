@@ -44,9 +44,6 @@ param(
     [string]$OutputPath,
 
     [Parameter(Mandatory = $false)]
-    [switch]$NoSelfDelete,
-
-    [Parameter(Mandatory = $false)]
     [switch]$UpdateModules,
 
     [Parameter(Mandatory = $false)]
