@@ -72,13 +72,3 @@ if ($OpenOutput)        { $runArgs += "-OpenOutput" }
 
 # Launch the assessment in a separate pwsh process
 $ztaProc = Start-Process -FilePath $pwsh -ArgumentList $runArgs -PassThru
-
-# Wait for completion so we can show a friendly final message
-Wait-Process -Id $ztaProc.Id
-
-Write-Host ""
-if ($ztaProc.ExitCode -eq 0) {
-    Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
-} else {
-    Write-Host "The Zero Trust Assessment finished with errors (exit code: $($ztaProc.ExitCode)). Review output/logs and rerun if needed." -ForegroundColor Yellow
-}
