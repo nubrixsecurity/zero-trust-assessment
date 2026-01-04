@@ -44,4 +44,3 @@ if ($ztaProc.ExitCode -eq 0) {
 } else {
     Write-Host "The Zero Trust Assessment finished with errors (exit code: $($ztaProc.ExitCode)). Review output/logs and rerun if needed." -ForegroundColor Yellow
 }
-Write-Host ""
