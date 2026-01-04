@@ -1037,30 +1037,28 @@ finally {
     #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
     #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
-    # If you're self-deleting, do NOT pause. Let the process exit so deletion can succeed.
-    if ($NoSelfDelete) {
-        Write-Host ""
-        Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
-        [void][System.Console]::ReadKey($true)
-        Write-Host ""
+    # Self-delete only when NOT using -NoSelfDelete
+    if (-not $NoSelfDelete) {
+        $deleteTargets = @(
+            $scriptPath,
+            $script:ExecSummaryContextPath,
+            $script:LicenseMapPath,
+            $script:NubrixTempRoot
+        )
+
+        Invoke-SelfDelete -Paths $deleteTargets
     }
-
-    $deleteTargets = @(
-        $scriptPath,
-        $script:ExecSummaryContextPath,
-        $script:LicenseMapPath,
-        $script:NubrixTempRoot
-    )
-
-    Invoke-SelfDelete -Paths $deleteTargets
 
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
     }
 
-    if (-not $NoSelfDelete) {
-        Write-Host ""
-        Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
+
+    # ONLY pause when -NoSelfDelete is used (wrapper / interactive runs)
+    if ($NoSelfDelete) {
+        [void][System.Console]::ReadKey($true)
         Write-Host ""
     }
 }
