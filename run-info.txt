@@ -1,6 +1,6 @@
 <#
     FLAGS:
-    -ExecSummary
+    -SkipExecSummary (optional)
     -SkipSecureScore (optional)
     -SkipLicenseReview (optional)
     -KeepZtExport   (optional; keeps the zt-export folder instead of deleting it)
@@ -10,9 +10,11 @@
 $tenantId = "your-tenant-id"
 $subId    = "your-subscription-id"
 
-$u = "https://raw.githubusercontent.com/nubrixsecurity/zero-trust-assessment/main/run-zta.ps1"
-$p = Join-Path $env:TEMP "run-zta.ps1"
+$ztaTemp = Join-Path $env:TEMP "nubrix-zta"
+New-Item -Path $ztaTemp -ItemType Directory -Force | Out-Null
 
-Invoke-WebRequest -Uri $u -OutFile $p
+$u = "https://raw.githubusercontent.com/nubrixsecurity/zero-trust-assessment/main/invoke-zta.ps1"
+$p = Join-Path $ztaTemp "invoke-zta.ps1"
 
-pwsh -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId -OpenOutput
+Invoke-WebRequest -Uri $u -OutFile $p -ErrorAction Stop
+pwsh -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId
