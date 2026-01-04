@@ -1,14 +1,22 @@
 <#
-    FLAGS:
-    -SkipExecSummary (optional)
-    -SkipSecureScore (optional)
-    -SkipLicenseReview (optional)
-    -KeepZtExport   (optional; keeps the zt-export folder instead of deleting it)
-    -OpenOutput     (optional; opens OutputPath at end)
+FLAGS:
+-SkipExecSummary (optional)
+-SkipSecureScore (optional)
+-SkipLicenseReview (optional)
+-KeepZtExport   (optional)
+-OpenOutput     (optional)
 #>
 
-$tenantId = "your-tenant-id"
-$subId    = "your-subscription-id"
+param(
+    [Parameter(Mandatory=$true)][string]$TenantId,
+    [Parameter(Mandatory=$true)][string]$SubscriptionId,
+
+    [switch]$SkipExecSummary,
+    [switch]$SkipSecureScore,
+    [switch]$SkipLicenseReview,
+    [switch]$KeepZtExport,
+    [switch]$OpenOutput
+)
 
 $ztaTemp = Join-Path $env:TEMP "nubrix-zta"
 New-Item -Path $ztaTemp -ItemType Directory -Force | Out-Null
@@ -17,4 +25,16 @@ $u = "https://raw.githubusercontent.com/nubrixsecurity/zero-trust-assessment/mai
 $p = Join-Path $ztaTemp "invoke-zta.ps1"
 
 Invoke-WebRequest -Uri $u -OutFile $p -ErrorAction Stop
-pwsh -NoProfile -ExecutionPolicy Bypass -File $p -TenantId $tenantId -SubscriptionId $subId
+
+$forward = @(
+    "-TenantId", $TenantId,
+    "-SubscriptionId", $SubscriptionId
+)
+
+if ($SkipExecSummary)   { $forward += "-SkipExecSummary" }
+if ($SkipSecureScore)   { $forward += "-SkipSecureScore" }
+if ($SkipLicenseReview) { $forward += "-SkipLicenseReview" }
+if ($KeepZtExport)      { $forward += "-KeepZtExport" }
+if ($OpenOutput)        { $forward += "-OpenOutput" }
+
+pwsh -NoProfile -ExecutionPolicy Bypass -File "`"$p`"" @forward
