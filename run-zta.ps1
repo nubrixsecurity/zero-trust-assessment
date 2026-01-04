@@ -60,34 +60,35 @@ param(
     [switch]$LicenseReview,
 
     [Parameter(Mandatory = $false)]
+    [switch]$SkipLicenseReview,
+
+    [Parameter(Mandatory = $false)]
     [string]$LicenseMapUrl = "https://raw.githubusercontent.com/nubrixsecurity/zero-trust-assessment/main/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv",
 
-    # Back-compat (kept, but ignored internally)
     [Parameter(Mandatory = $false)]
     [switch]$SecureScore,
 
-    # NEW: default behavior is RUN unless skipped
     [Parameter(Mandatory = $false)]
     [switch]$SkipSecureScore,
 
     [Parameter(Mandatory = $false)]
-    [switch]$SkipLicenseReview,
-
+    [switch]$ExecSummary,
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$SkipExecSummary,
+    
     [Parameter(Mandatory = $false)]
     [switch]$KeepZtExport,
 
     [Parameter(Mandatory = $false)]
-    [switch]$ExecSummary,
+    [switch]$OpenOutput,
 
-    # Optional metadata for reporting/context
+     # Optional metadata for reporting/context
     [Parameter(Mandatory = $false)]
     [string]$CustomerName,
 
     [Parameter(Mandatory = $false)]
-    [string]$PreparedBy = "Nubrix Security",
-
-    [Parameter(Mandatory = $false)]
-    [switch]$OpenOutput
+    [string]$PreparedBy = "Nubrix Security"
 )
 
 #region Output path (Documents + date + timestamp)
@@ -99,10 +100,10 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 }
 New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
 
-# Nubrix temp working folder (safe to delete as a unit)
+#region Nubrix temp working folder
 $script:NubrixTempRoot = Join-Path $env:TEMP "nubrix-zta"
 New-Item -Path $script:NubrixTempRoot -ItemType Directory -Force | Out-Null
-#endregion Output path
+#endregion Nubrix temp working folder
 
 #region Ensure module installed (install only if missing)
 function Ensure-ModuleInstalled {
@@ -244,9 +245,9 @@ function Invoke-LicenseReview {
 
     $licenseFolder = Join-Path $OutputPath "License Review"
     New-Item -Path $licenseFolder -ItemType Directory -Force | Out-Null
-
+    
     $mapFileName = "Product names and service plan identifiers for licensing.csv"
-    $mapPath = Join-Path $licenseFolder $mapFileName
+    $mapPath = Join-Path $script:NubrixTempRoot $mapFileName
     $script:LicenseMapPath = $mapPath
     if (-not (Test-Path -LiteralPath $mapPath)) {
         Invoke-WebRequest -Uri $LicenseMapUrl -OutFile $mapPath -ErrorAction Stop
@@ -938,7 +939,7 @@ try {
     try {
         if ($export -and $export.AssessmentFolder -and $export.ActionableCsv -and (Test-Path -LiteralPath $export.ActionableCsv)) {
     
-            $ctxPath = Join-Path $export.AssessmentFolder "ExecutiveSummary.Context.json"
+            $ctxPath = Join-Path $script:NubrixTempRoot "ExecutiveSummary.Context.json"
             $script:ExecSummaryContextPath = $ctxPath
     
             # Resolve CustomerName:
@@ -1003,10 +1004,11 @@ try {
     
             $null = Write-ExecSummaryContextFile -ContextPath $ctxPath -Context $ctx
     
-            if ($ExecSummary) {
+            # DEFAULT RUN: Exec Summary (unless skipped)
+            if (-not $SkipExecSummary) {
                 $execSummaryUrl = "https://github.com/nubrixsecurity/zero-trust-assessment/blob/main/invoke-zta-execsummary.ps1"
                 $execScript = Get-ExecSummaryScriptFromTempOrDownload -ScriptUrl $execSummaryUrl
-    
+            
                 if ($execScript -and (Test-Path -LiteralPath $execScript) -and (Test-Path -LiteralPath $ctxPath)) {
                     $ok = Invoke-ExecSummaryScript -ScriptPath $execScript -ContextPath $ctxPath
                     if (-not $ok) {
