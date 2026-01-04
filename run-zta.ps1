@@ -992,5 +992,8 @@ finally {
     }
 
     $folder = $script:NubrixTempRoot
-    try { if (Test-Path -LiteralPath `$folder) { Remove-Item -LiteralPath `$folder -Recurse -Force -ErrorAction SilentlyContinue } } catch {}
+    try { 
+        Remove-Item -LiteralPath $script:NubrixTempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
+    } catch {}
 }
