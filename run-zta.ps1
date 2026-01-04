@@ -992,4 +992,23 @@ finally {
     }
 }
 
+# Schedule cleanup of %TEMP%\nubrix-zta after THIS pwsh process exits
+try {
+    $ztaTemp = Join-Path $env:TEMP "nubrix-zta"
+    $pwshExe = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+    if (-not $pwshExe) { $pwshExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe" }
+
+    Start-Process -FilePath $pwshExe -WindowStyle Hidden -ArgumentList @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "param(`$pidToWait, `$folder); " +
+        "try { Wait-Process -Id `$pidToWait -ErrorAction SilentlyContinue } catch {}; " +
+        "Start-Sleep -Seconds 2; " +
+        "try { if (Test-Path -LiteralPath `$folder) { Remove-Item -LiteralPath `$folder -Recurse -Force -ErrorAction SilentlyContinue } } catch {}",
+        "-pidToWait", $PID,
+        "-folder", $ztaTemp
+    ) | Out-Null
+} catch {}
+
 exit $script:ExitCode
