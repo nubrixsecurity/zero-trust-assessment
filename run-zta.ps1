@@ -88,6 +88,16 @@ param(
     [string]$PreparedBy = "Nubrix Security"
 )
 
+# Tracking outputs for context file
+$script:SecureScorePercent        = $null
+$script:SecureScorePoints         = $null
+$script:SecureScoreMaxScore       = $null
+$script:SecureScoreCreatedDate    = $null
+$script:SecureScoreChartPath      = $null
+$script:SecureScoreSummaryCsvPath = $null
+$script:LicenseReviewCsvPath      = $null
+$script:ExitCode = 0
+
 #region Output path (Documents + date + timestamp)
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $base = Join-Path $env:USERPROFILE "Documents\Zero-Trust-Assessment"
@@ -790,15 +800,6 @@ function Invoke-ExecSummaryScript {
 }
 #endregion Exec Summary runner helpers
 
-# Tracking outputs for context file
-$script:SecureScorePercent        = $null
-$script:SecureScorePoints         = $null
-$script:SecureScoreMaxScore       = $null
-$script:SecureScoreCreatedDate    = $null
-$script:SecureScoreChartPath      = $null
-$script:SecureScoreSummaryCsvPath = $null
-$script:LicenseReviewCsvPath      = $null
-
 try {
     Ensure-ModuleInstalled -Name "ZeroTrustAssessment" -Update:$UpdateModules
 
@@ -977,6 +978,7 @@ try {
     Write-Host "[INFO] Completed. Results saved to: $OutputPath" -f cyan
 }
 catch {
+    $script:ExitCode = 1
     Write-Error $_.Exception.Message
     throw
 }
@@ -988,4 +990,6 @@ finally {
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
     }
+
+    exit $script:ExitCode
 }
