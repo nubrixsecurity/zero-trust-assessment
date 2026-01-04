@@ -4,7 +4,13 @@ param(
     [string]$TenantId,
 
     [Parameter(Mandatory = $true)]
-    [string]$SubscriptionId
+    [string]$SubscriptionId,
+
+    [switch]$SkipExecSummary,
+    [switch]$SkipSecureScore,
+    [switch]$SkipLicenseReview,
+    [switch]$KeepZtExport,
+    [switch]$OpenOutput
 )
 
 function Get-PwshPath {
@@ -49,15 +55,23 @@ $u = "https://raw.githubusercontent.com/nubrixsecurity/zero-trust-assessment/mai
 $p = Join-Path $ztaTemp "run-zta.ps1"
 Invoke-WebRequest -Uri $u -OutFile $p -ErrorAction Stop
 
-# Launch the assessment in a separate pwsh process
-$ztaProc = Start-Process -FilePath $pwsh -ArgumentList @(
+# Build args for run-zta.ps1 (forward switches)
+$runArgs = @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
     "-File", "`"$p`"",
     "-TenantId", $TenantId,
-    "-SubscriptionId", $SubscriptionId,
-    "-OpenOutput"
-) -PassThru
+    "-SubscriptionId", $SubscriptionId
+)
+
+if ($SkipExecSummary)   { $runArgs += "-SkipExecSummary" }
+if ($SkipSecureScore)   { $runArgs += "-SkipSecureScore" }
+if ($SkipLicenseReview) { $runArgs += "-SkipLicenseReview" }
+if ($KeepZtExport)      { $runArgs += "-KeepZtExport" }
+if ($OpenOutput)        { $runArgs += "-OpenOutput" }
+
+# Launch the assessment in a separate pwsh process
+$ztaProc = Start-Process -FilePath $pwsh -ArgumentList $runArgs -PassThru
 
 # Detached cleanup worker: waits for the ZTA process to exit, then deletes %TEMP%\nubrix-zta
 Start-Process -FilePath $pwsh -WindowStyle Hidden -ArgumentList @(
@@ -81,3 +95,4 @@ if ($ztaProc.ExitCode -eq 0) {
 } else {
     Write-Host "The Zero Trust Assessment finished with errors (exit code: $($ztaProc.ExitCode)). Review output/logs and rerun if needed." -ForegroundColor Yellow
 }
+Write-Host ""
