@@ -73,19 +73,6 @@ if ($OpenOutput)        { $runArgs += "-OpenOutput" }
 # Launch the assessment in a separate pwsh process
 $ztaProc = Start-Process -FilePath $pwsh -ArgumentList $runArgs -PassThru
 
-# Detached cleanup worker: waits for the ZTA process to exit, then deletes %TEMP%\nubrix-zta
-Start-Process -FilePath $pwsh -WindowStyle Hidden -ArgumentList @(
-    "-NoProfile",
-    "-ExecutionPolicy", "Bypass",
-    "-Command",
-    "param(`$pidToWait, `$folder); " +
-    "try { Wait-Process -Id `$pidToWait -ErrorAction SilentlyContinue } catch {}; " +
-    "Start-Sleep -Seconds 2; " +
-    "try { if (Test-Path -LiteralPath `$folder) { Remove-Item -LiteralPath `$folder -Recurse -Force -ErrorAction SilentlyContinue } } catch {}",
-    "-pidToWait", $ztaProc.Id,
-    "-folder", $ztaTemp
-) | Out-Null
-
 # Wait for completion so we can show a friendly final message
 Wait-Process -Id $ztaProc.Id
 
