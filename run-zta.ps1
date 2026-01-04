@@ -1053,12 +1053,6 @@ finally {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
     }
 
-    Write-Host ""
-    Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
-
-    # ONLY pause when -NoSelfDelete is used (wrapper / interactive runs)
-    if ($NoSelfDelete) {
-        [void][System.Console]::ReadKey($true)
-        Write-Host ""
-    }
+    #Write-Host ""
+    #Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
 }
