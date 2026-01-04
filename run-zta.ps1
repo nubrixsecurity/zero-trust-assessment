@@ -793,53 +793,6 @@ function Invoke-ExecSummaryScript {
 }
 #endregion Exec Summary runner helpers
 
-#region Self-delete (best-effort)
-function Invoke-SelfDelete {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $false)]
-        [string[]]$Paths
-    )
-
-    if ($NoSelfDelete) { return }
-
-    $targets = @()
-    foreach ($p in $Paths) {
-        if (-not [string]::IsNullOrWhiteSpace($p)) { $targets += $p }
-    }
-    if ($targets.Count -eq 0) { return }
-
-    try {
-        $psExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
-
-        $cmd = @()
-        $cmd += 'Start-Sleep -Seconds 3'
-        $cmd += 'foreach ($p in $args) {'
-        $cmd += '  if ([string]::IsNullOrWhiteSpace($p)) { continue }'
-        $cmd += '  for ($i=0; $i -lt 20; $i++) {'
-        $cmd += '    try {'
-        $cmd += '      if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop }'
-        $cmd += '      break'
-        $cmd += '    } catch { Start-Sleep -Milliseconds 500 }'
-        $cmd += '  }'
-        $cmd += '}'
-
-        $scriptText = ($cmd -join '; ')
-        $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptText))
-
-        $argLine = "/c ping 127.0.0.1 -n 3 > nul & `"$psExe`" -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc --% " +
-                   (($targets | ForEach-Object { '"' + $_ + '"' }) -join ' ')
-
-        Start-Process -FilePath "cmd.exe" -ArgumentList $argLine -WindowStyle Hidden | Out-Null
-    }
-    catch {
-        # best-effort
-    }
-}
-#endregion Self-delete
-
-$scriptPath = $MyInvocation.MyCommand.Path
-
 # Tracking outputs for context file
 $script:SecureScorePercent        = $null
 $script:SecureScorePoints         = $null
@@ -848,10 +801,6 @@ $script:SecureScoreCreatedDate    = $null
 $script:SecureScoreChartPath      = $null
 $script:SecureScoreSummaryCsvPath = $null
 $script:LicenseReviewCsvPath      = $null
-$script:ExecSummaryContextPath    = $null
-$script:LicenseMapPath            = $null
-$script:NubrixTempRoot            = $null
-
 
 try {
     Ensure-ModuleInstalled -Name "ZeroTrustAssessment" -Update:$UpdateModules
@@ -1039,22 +988,7 @@ finally {
     #$null = Clear-AzContext -Scope Process -ErrorAction SilentlyContinue
     #$null = Disconnect-MgGraph -ErrorAction SilentlyContinue
 
-    # Self-delete only when NOT using -NoSelfDelete
-    if (-not $NoSelfDelete) {
-        $deleteTargets = @(
-            $scriptPath,
-            $script:ExecSummaryContextPath,
-            $script:LicenseMapPath,
-            $script:NubrixTempRoot
-        )
-
-        Invoke-SelfDelete -Paths $deleteTargets
-    }
-
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
     }
-
-    #Write-Host ""
-    #Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
 }
