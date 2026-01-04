@@ -992,5 +992,9 @@ finally {
     }
 }
 
-# IMPORTANT: the script must reach here to reliably terminate the pwsh process
-exit $script:ExitCode
+$timeoutSec = 2  # 15 minutes, adjust as desired
+$exited = Wait-Process -Id $ztaProc.Id -Timeout $timeoutSec -ErrorAction SilentlyContinue
+
+if (-not $exited) {
+    try { Stop-Process -Id $ztaProc.Id -Force -ErrorAction SilentlyContinue } catch {}
+}
