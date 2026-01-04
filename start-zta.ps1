@@ -12,13 +12,14 @@ OPTIONAL FLAGS:
 -KeepZtExport
 -OpenOutput
 
-How to run:
+HOW TO RUN:
 Step 1 — Download the launcher script (start-zta.ps1)
 Open PowerShell (recommended: PowerShell 7, but Windows PowerShell works for the download step)
 
 Run command:
 $u = "https://raw.githubusercontent.com/nubrixsecurity/zero-trust-assessment/main/start-zta.ps1"
 $p = Join-Path $env:USERPROFILE "Documents\start-zta.ps1"
+if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
 Invoke-WebRequest -Uri $u -OutFile $p -ErrorAction Stop
 
 Step 2 — Run the assessment
