@@ -980,9 +980,9 @@ try {
 catch {
     $script:ExitCode = 1
     Write-Error $_.Exception.Message
-    throw
 }
 finally {
+    # Disconnects (optional but fine)
     #try { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null } catch {}
     #try { Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue | Out-Null } catch {}
     #try { Clear-AzContext -Scope Process -ErrorAction SilentlyContinue | Out-Null } catch {}
@@ -990,6 +990,7 @@ finally {
     if ($OpenOutput) {
         try { Invoke-Item -Path $OutputPath | Out-Null } catch {}
     }
-
-    exit $script:ExitCode
 }
+
+# IMPORTANT: the script must reach here to reliably terminate the pwsh process
+exit $script:ExitCode
