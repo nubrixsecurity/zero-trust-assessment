@@ -995,5 +995,7 @@ finally {
     try { 
         Remove-Item -LiteralPath $script:NubrixTempRoot -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "The Zero Trust Assessment has completed successfully. You may now close this window." -ForegroundColor Green
-    } catch {}
+    } catch {
+        Write-Host "The Zero Trust Assessment finished with errors (exit code: $($ztaProc.ExitCode)). Review output/logs and rerun if needed." -ForegroundColor Yellow
+    }
 }
