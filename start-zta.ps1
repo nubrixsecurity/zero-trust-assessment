@@ -77,8 +77,12 @@ function Download-WithSasErrorHandling {
         [Parameter(Mandatory = $true)][string]$OutFile,
         [Parameter(Mandatory = $true)][string]$FriendlyName
     )
+
+    $oldPP = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
     try {
         Invoke-WebRequest -Uri $Uri -OutFile $OutFile -ErrorAction Stop
+        try { Unblock-File -LiteralPath $OutFile -ErrorAction SilentlyContinue } catch {}
         return $true
     } catch {
         $msg = $_.Exception.Message
@@ -88,6 +92,8 @@ function Download-WithSasErrorHandling {
             Write-Err "Failed to download $FriendlyName. $msg"
         }
         return $false
+    } finally {
+        $ProgressPreference = $oldPP
     }
 }
 
@@ -95,17 +101,42 @@ $ztaTemp = Join-Path $env:TEMP "nubrix-zta"
 New-Item -Path $ztaTemp -ItemType Directory -Force | Out-Null
 
 $invokePath      = Join-Path $ztaTemp "invoke-zta.ps1"
+$runPath         = Join-Path $ztaTemp "run-zta.ps1"
 $execSummaryPath = Join-Path $ztaTemp "invoke-zta-execsummary.ps1"
 
-if (-not (Download-WithSasErrorHandling -Uri $InvokeSasUrl -OutFile $invokePath -FriendlyName "invoke-zta.ps1")) { exit 1 }
+if (-not (Download-WithSasErrorHandling -Uri $InvokeSasUrl      -OutFile $invokePath      -FriendlyName "invoke-zta.ps1")) { exit 1 }
+if (-not (Download-WithSasErrorHandling -Uri $RunSasUrl         -OutFile $runPath         -FriendlyName "run-zta.ps1"))    { exit 1 }
 if (-not (Download-WithSasErrorHandling -Uri $ExecSummarySasUrl -OutFile $execSummaryPath -FriendlyName "invoke-zta-execsummary.ps1")) { exit 1 }
+
+$invokeText = Get-Content -LiteralPath $invokePath -Raw -ErrorAction SilentlyContinue
+
+$invokeHasRunPath         = $false
+$invokeHasExecSummaryPath = $false
+$invokeHasExecSummarySas  = $false
+
+if (-not [string]::IsNullOrWhiteSpace($invokeText)) {
+    $invokeHasRunPath         = $invokeText -match '(?mi)^\s*\[\s*(?:Parameter\([^\)]*\)\s*)?\]\s*\[\s*string\s*\]\s*\$RunPath\b' -or $invokeText -match '(?mi)^\s*\[\s*string\s*\]\s*\$RunPath\b'
+    $invokeHasExecSummaryPath = $invokeText -match '(?mi)^\s*\[\s*(?:Parameter\([^\)]*\)\s*)?\]\s*\[\s*string\s*\]\s*\$ExecSummaryPath\b' -or $invokeText -match '(?mi)^\s*\[\s*string\s*\]\s*\$ExecSummaryPath\b'
+    $invokeHasExecSummarySas  = $invokeText -match '(?mi)^\s*\[\s*(?:Parameter\([^\)]*\)\s*)?\]\s*\[\s*string\s*\]\s*\$ExecSummarySasUrl\b' -or $invokeText -match '(?mi)^\s*\[\s*string\s*\]\s*\$ExecSummarySasUrl\b'
+}
 
 $forward = @(
     "-TenantId", $TenantId,
     "-SubscriptionId", $SubscriptionId,
-    "-RunSasUrl", $RunSasUrl,
-    "-ExecSummarySasUrl", $ExecSummarySasUrl
+    "-RunSasUrl", $RunSasUrl
 )
+
+if ($invokeHasRunPath) {
+    $forward += @("-RunPath", $runPath)
+}
+
+if ($invokeHasExecSummarySas) {
+    $forward += @("-ExecSummarySasUrl", $ExecSummarySasUrl)
+}
+
+if ($invokeHasExecSummaryPath) {
+    $forward += @("-ExecSummaryPath", $execSummaryPath)
+}
 
 if ($Partner)           { $forward += "-Partner" }
 if ($SkipExecSummary)   { $forward += "-SkipExecSummary" }
