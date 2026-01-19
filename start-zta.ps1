@@ -8,15 +8,21 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$SubscriptionId,
 
-    [Parameter(Mandatory = $true)]
+    # NEW: single container SAS URL (optional, but preferred going forward)
+    [Parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string]$ZtaContainerSasUrl,
+
+    # Legacy per-file SAS URLs (now optional; will be derived from ZtaContainerSasUrl if not provided)
+    [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
     [string]$InvokeSasUrl,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
     [string]$RunSasUrl,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
     [string]$ExecSummarySasUrl,
 
@@ -32,6 +38,42 @@ param(
 function Write-Err {
     param([Parameter(Mandatory = $true)][string]$Message)
     Write-Host "[ERROR] $Message"
+}
+
+# ---------------------------
+# Resolve URLs
+# ---------------------------
+# Preferred: single container SAS URL, from which we derive the three script URLs.
+# Fallback: legacy mode where all three URLs are passed in directly.
+if ($ZtaContainerSasUrl) {
+    # Expect something like:
+    # https://stzta.blob.core.windows.net/zta-scripts?sv=...&sr=c&sp=r&sig=...
+    $qIndex = $ZtaContainerSasUrl.IndexOf("?")
+    if ($qIndex -lt 0) {
+        Write-Err "ZtaContainerSasUrl does not contain a SAS query string ('?'). Please provide a valid container SAS URL."
+        exit 1
+    }
+
+    # Base URL: https://stzta.blob.core.windows.net/zta-scripts
+    $baseUrl = $ZtaContainerSasUrl.Substring(0, $qIndex).TrimEnd("/")
+
+    # SAS part: ?sv=...&se=...&sp=...&sig=...
+    $sasPart = $ZtaContainerSasUrl.Substring($qIndex)
+
+    # Derive the three URLs from the container SAS
+    $InvokeSasUrl      = "$baseUrl/prod/invoke-zta.ps1$sasPart"
+    $RunSasUrl         = "$baseUrl/prod/run-zta.ps1$sasPart"
+    $ExecSummarySasUrl = "$baseUrl/prod/invoke-zta-execsummary.ps1$sasPart"
+}
+else {
+    # Legacy mode: validate that the three URLs were provided
+    if ([string]::IsNullOrWhiteSpace($InvokeSasUrl) -or
+        [string]::IsNullOrWhiteSpace($RunSasUrl)    -or
+        [string]::IsNullOrWhiteSpace($ExecSummarySasUrl)) {
+
+        Write-Err "Either ZtaContainerSasUrl must be provided, or all three of InvokeSasUrl, RunSasUrl, and ExecSummarySasUrl must be specified."
+        exit 1
+    }
 }
 
 function Download-WithSasErrorHandling {
